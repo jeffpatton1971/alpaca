@@ -29,7 +29,14 @@ internal sealed class QuoteService(
             configuration.Feed.ToString().ToLowerInvariant(),
             MarketTime.ToUtcString(retrievedAt),
             "America/Chicago",
-            snapshot?.Session.ToString().ToLowerInvariant() ?? "unknown",
+            snapshot?.Session switch
+            {
+                MarketSession.Regular => "regular",
+                MarketSession.PreMarket => "pre_market",
+                MarketSession.AfterHours => "after_hours",
+                MarketSession.Closed => "closed",
+                _ => "unknown"
+            },
             outputSymbols,
             new QuoteSummary(outputSymbols.Length, succeeded, failed),
             null);

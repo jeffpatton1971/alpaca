@@ -1,19 +1,41 @@
 using Alpaca.Markets;
+using Alpaca.Markets.Extensions;
 
 namespace Market.Cli;
 
 internal sealed class AlpacaMarketDataProvider : IMarketDataProvider
 {
     private const int MaxSymbolsPerRequest = 1000;
+    private const int MaxPagesPerBatch = 2048;
+    private const int MaxPageTokenLength = 4096;
 
     private readonly IAlpacaDataClient _dataClient;
     private readonly IAlpacaTradingClient _tradingClient;
 
     public AlpacaMarketDataProvider(MarketSettings configuration)
+        : this(CreateDataConfiguration(configuration).GetClient(),
+            CreateTradingConfiguration(configuration).GetClient())
     {
-        var key = new SecretKey(configuration.ApiKey, configuration.ApiSecret);
-        _dataClient = new MarketDataEnvironment(configuration.DataEndpoint).GetAlpacaDataClient(key);
-        _tradingClient = Environments.Live.GetAlpacaTradingClient(key);
+    }
+
+    internal AlpacaMarketDataProvider(IAlpacaDataClient dataClient, IAlpacaTradingClient tradingClient)
+    {
+        _dataClient = dataClient;
+        _tradingClient = tradingClient;
+    }
+
+    internal static AlpacaDataClientConfiguration CreateDataConfiguration(MarketSettings settings) =>
+        WithoutRetries(new MarketDataEnvironment(settings.DataEndpoint)
+            .GetAlpacaDataClientConfiguration(new SecretKey(settings.ApiKey, settings.ApiSecret)));
+
+    internal static AlpacaTradingClientConfiguration CreateTradingConfiguration(MarketSettings settings) =>
+        WithoutRetries(Environments.Live
+            .GetAlpacaTradingClientConfiguration(new SecretKey(settings.ApiKey, settings.ApiSecret)));
+
+    private static T WithoutRetries<T>(T configuration) where T : AlpacaClientConfigurationBase
+    {
+        configuration.ThrottleParameters = new ThrottleParameters(0, [], []);
+        return configuration;
     }
 
     public async Task<ProviderSnapshot> GetSnapshotAsync(
@@ -21,22 +43,32 @@ internal sealed class AlpacaMarketDataProvider : IMarketDataProvider
         MarketDataFeed feed,
         CancellationToken cancellationToken)
     {
-        var clockTask = _tradingClient.GetClockAsync(cancellationToken);
-        var tradesTask = GetLatestTradesAsync(symbols, feed, cancellationToken);
-        await Task.WhenAll(clockTask, tradesTask).ConfigureAwait(false);
+        var trades = await GetLatestTradesAsync(symbols, feed, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        DateTimeOffset clockTimestamp = default;
+        MarketSession marketSession;
+        SessionTiming? completedSession;
+        try
+        {
+            var clock = await _tradingClient.GetClockAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            clockTimestamp = MarketTime.AsUtc(clock.TimestampUtc);
+            var currentDate = MarketTime.EasternDate(clockTimestamp);
+            var calendar = await _tradingClient.ListIntervalCalendarAsync(
+                new CalendarRequest(currentDate.AddDays(-14), currentDate.AddDays(1)),
+                cancellationToken).ConfigureAwait(false);
+            var sessions = calendar.Select(ToSessionTiming).ToArray();
+            marketSession = MarketSessionClassifier.Resolve(clockTimestamp, clock.IsOpen, sessions);
+            completedSession = MarketSessionClassifier.PreviousCompletedSession(clockTimestamp, sessions);
+        }
+        catch (Exception exception) when (MarketErrorMapper.IsProviderFailure(exception))
+        {
+            marketSession = MarketSession.Unknown;
+            completedSession = null;
+        }
 
-        var clock = await clockTask.ConfigureAwait(false);
-        var trades = await tradesTask.ConfigureAwait(false);
-        var clockTimestamp = MarketTime.AsUtc(clock.TimestampUtc);
-        var currentDate = MarketTime.EasternDate(clockTimestamp);
-        var calendar = await _tradingClient.ListIntervalCalendarAsync(
-            new CalendarRequest(currentDate.AddDays(-14), currentDate.AddDays(1)),
-            cancellationToken).ConfigureAwait(false);
-        var sessions = calendar.Select(ToSessionTiming).ToArray();
-        var marketSession = MarketSessionClassifier.Resolve(clockTimestamp, clock.IsOpen, sessions);
-
+        cancellationToken.ThrowIfCancellationRequested();
         var previousClose = new Dictionary<string, decimal>(StringComparer.Ordinal);
-        var completedSession = MarketSessionClassifier.PreviousCompletedSession(clockTimestamp, sessions);
         if (completedSession is not null)
         {
             previousClose = await GetPreviousClosesAsync(
@@ -72,6 +104,7 @@ internal sealed class AlpacaMarketDataProvider : IMarketDataProvider
         var results = new Dictionary<string, MarketTrade>(StringComparer.Ordinal);
         foreach (var chunk in symbols.Chunk(MaxSymbolsPerRequest))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var trades = await _dataClient.ListLatestTradesAsync(
                 new LatestMarketDataListRequest(chunk) { Feed = feed },
                 cancellationToken).ConfigureAwait(false);
@@ -101,13 +134,38 @@ internal sealed class AlpacaMarketDataProvider : IMarketDataProvider
                 Adjustment = Adjustment.Nothing,
                 Feed = feed
             };
-            var page = await _dataClient.ListHistoricalBarsAsync(request, cancellationToken).ConfigureAwait(false);
-            foreach (var bar in page.Items)
+            var requested = chunk.ToHashSet(StringComparer.Ordinal);
+            var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+            for (var pageNumber = 1; ; pageNumber++)
             {
-                if (MarketTime.EasternDate(MarketTime.AsUtc(bar.TimeUtc)) == sessionDate)
+                cancellationToken.ThrowIfCancellationRequested();
+                var page = await _dataClient.ListHistoricalBarsAsync(request, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var bar in page.Items)
                 {
-                    results[bar.Symbol] = (decimal)bar.Close;
+                    if (requested.Contains(bar.Symbol)
+                        && MarketTime.EasternDate(MarketTime.AsUtc(bar.TimeUtc)) == sessionDate)
+                    {
+                        var close = (decimal)bar.Close;
+                        if (!results.TryAdd(bar.Symbol, close) && results[bar.Symbol] != close)
+                        {
+                            throw new UnexpectedProviderResponseException();
+                        }
+                    }
                 }
+
+                if (page.NextPageToken is not { } token)
+                {
+                    break;
+                }
+
+                if (pageNumber >= MaxPagesPerBatch || token.Length > MaxPageTokenLength
+                    || string.IsNullOrWhiteSpace(token) || token.Any(char.IsControl) || !seenTokens.Add(token))
+                {
+                    throw new UnexpectedProviderResponseException();
+                }
+
+                request.Pagination.Token = token;
             }
         }
 

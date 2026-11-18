@@ -150,7 +150,8 @@
       "market.cli": {
         "type": "Project",
         "dependencies": {
-          "Alpaca.Markets": "[8.0.1, )"
+          "Alpaca.Markets": "[8.0.1, )",
+          "Newtonsoft.Json": "[13.0.3, )"
         }
       }
     }

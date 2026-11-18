@@ -6,6 +6,11 @@ namespace Market.Cli;
 
 internal static class MarketErrorMapper
 {
+    public static bool IsProviderFailure(Exception exception) =>
+        exception is RestClientErrorException or RequestValidationException or HttpRequestException
+            or SocketException or TimeoutException or IOException or Newtonsoft.Json.JsonException
+            or UnexpectedProviderResponseException;
+
     public static MarketError FromProviderException(Exception exception, bool timedOut = false)
     {
         if (timedOut)
@@ -18,10 +23,12 @@ internal static class MarketErrorMapper
             RestClientErrorException restException => FromStatusCode(restException.HttpStatusCode),
             HttpRequestException requestException when requestException.StatusCode.HasValue =>
                 FromStatusCode(requestException.StatusCode),
-            HttpRequestException or SocketException =>
+            HttpRequestException or SocketException or IOException =>
                 new MarketError("NETWORK_ERROR", "The Alpaca request could not be completed."),
             RequestValidationException =>
                 new MarketError("UNEXPECTED_PROVIDER_RESPONSE", "The Alpaca request could not be validated."),
+            Newtonsoft.Json.JsonException or UnexpectedProviderResponseException =>
+                new MarketError("UNEXPECTED_PROVIDER_RESPONSE", "Alpaca returned an invalid response."),
             OperationCanceledException =>
                 new MarketError("REQUEST_CANCELLED", "The market-data request was cancelled."),
             TimeoutException =>
@@ -54,3 +61,5 @@ internal static class MarketErrorMapper
             _ => new MarketError("PROVIDER_UNAVAILABLE", "The Alpaca service could not complete the request.")
         };
 }
+
+internal sealed class UnexpectedProviderResponseException : Exception;

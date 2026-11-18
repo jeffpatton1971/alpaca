@@ -1,4 +1,3 @@
-using System.Net.Sockets;
 using System.Reflection;
 using Alpaca.Markets;
 
@@ -9,7 +8,8 @@ internal sealed class CliApplication(
     TextWriter output,
     TextWriter error,
     Func<MarketSettings, IMarketDataProvider> providerFactory,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    TimeSpan? requestTimeout = null)
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
 
@@ -85,13 +85,13 @@ internal sealed class CliApplication(
         }
 
         var configuration = configurationResult.Configuration!;
-        using var timeoutSource = new CancellationTokenSource(RequestTimeout);
+        using var timeoutSource = new CancellationTokenSource(requestTimeout ?? RequestTimeout);
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
         try
         {
-            using var provider = providerFactory(configuration);
-            var service = new QuoteService(provider, configuration, timeProvider);
-            var response = await service.GetQuotesAsync(symbols, linkedSource.Token).ConfigureAwait(false);
+            var response = await RunProviderAsync(configuration, (provider, token) =>
+                new QuoteService(provider, configuration, timeProvider).GetQuotesAsync(symbols, token),
+                linkedSource.Token).ConfigureAwait(false);
             await WriteJsonAsync(response).ConfigureAwait(false);
             foreach (var quote in response.Symbols.Where(quote => quote.Error is not null))
             {
@@ -103,41 +103,10 @@ internal sealed class CliApplication(
                 ? 1
                 : 0;
         }
-        catch (RestClientErrorException exception)
+        catch (Exception exception) when (IsOperationFailure(exception))
         {
             return await WriteQuoteFailureAsync(
-                symbols, MarketErrorMapper.FromProviderException(exception), configuration.Feed)
-                .ConfigureAwait(false);
-        }
-        catch (RequestValidationException exception)
-        {
-            return await WriteQuoteFailureAsync(
-                symbols, MarketErrorMapper.FromProviderException(exception), configuration.Feed)
-                .ConfigureAwait(false);
-        }
-        catch (HttpRequestException exception)
-        {
-            return await WriteQuoteFailureAsync(
-                symbols, MarketErrorMapper.FromProviderException(exception), configuration.Feed)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException exception)
-        {
-            var timedOut = timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
-            return await WriteQuoteFailureAsync(
-                symbols, MarketErrorMapper.FromProviderException(exception, timedOut), configuration.Feed)
-                .ConfigureAwait(false);
-        }
-        catch (SocketException exception)
-        {
-            return await WriteQuoteFailureAsync(
-                symbols, MarketErrorMapper.FromProviderException(exception), configuration.Feed)
-                .ConfigureAwait(false);
-        }
-        catch (TimeoutException exception)
-        {
-            return await WriteQuoteFailureAsync(
-                symbols, MarketErrorMapper.FromProviderException(exception), configuration.Feed)
+                symbols, MapOperationFailure(exception, cancellationToken, timeoutSource.Token), configuration.Feed)
                 .ConfigureAwait(false);
         }
     }
@@ -156,41 +125,26 @@ internal sealed class CliApplication(
 
         var result = MarketConfiguration.Load(environment);
         var diagnostics = result.Diagnostics.ToList();
+        MarketError? connectionError = null;
         if (result.IsValid && checkConnection)
         {
-            using var timeoutSource = new CancellationTokenSource(RequestTimeout);
+            using var timeoutSource = new CancellationTokenSource(requestTimeout ?? RequestTimeout);
             using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
             try
             {
-                using var provider = providerFactory(result.Configuration!);
-                await provider.CheckConnectivityAsync(result.Configuration!.Feed, linkedSource.Token).ConfigureAwait(false);
+                var configuration = result.Configuration!;
+                await RunProviderAsync(configuration, async (provider, token) =>
+                {
+                    await provider.CheckConnectivityAsync(configuration.Feed, token).ConfigureAwait(false);
+                    return true;
+                }, linkedSource.Token).ConfigureAwait(false);
                 diagnostics.Add(new DoctorDiagnostic("marketDataAccess", "ok",
                     "Authenticated market-data access succeeded using the selected feed."));
             }
-            catch (RestClientErrorException exception)
+            catch (Exception exception) when (IsOperationFailure(exception))
             {
-                diagnostics.Add(ToDoctorFailure(MarketErrorMapper.FromProviderException(exception)));
-            }
-            catch (RequestValidationException exception)
-            {
-                diagnostics.Add(ToDoctorFailure(MarketErrorMapper.FromProviderException(exception)));
-            }
-            catch (HttpRequestException exception)
-            {
-                diagnostics.Add(ToDoctorFailure(MarketErrorMapper.FromProviderException(exception)));
-            }
-            catch (OperationCanceledException exception)
-            {
-                var timedOut = timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
-                diagnostics.Add(ToDoctorFailure(MarketErrorMapper.FromProviderException(exception, timedOut)));
-            }
-            catch (SocketException exception)
-            {
-                diagnostics.Add(ToDoctorFailure(MarketErrorMapper.FromProviderException(exception)));
-            }
-            catch (TimeoutException exception)
-            {
-                diagnostics.Add(ToDoctorFailure(MarketErrorMapper.FromProviderException(exception)));
+                connectionError = MapOperationFailure(exception, cancellationToken, timeoutSource.Token);
+                diagnostics.Add(ToDoctorFailure(connectionError));
             }
         }
 
@@ -220,8 +174,47 @@ internal sealed class CliApplication(
             }
         }
 
-        return status == "ok" ? 0 : result.Configuration is null ? 3 : 4;
+        return connectionError is not null ? MarketErrorMapper.ExitCode(connectionError)
+            : result.Error is not null ? MarketErrorMapper.ExitCode(result.Error) : 0;
     }
+
+    private async Task<T> RunProviderAsync<T>(
+        MarketSettings configuration,
+        Func<IMarketDataProvider, CancellationToken, Task<T>> operation,
+        CancellationToken token)
+    {
+        // The SDK can read the response body synchronously without a token.
+        // The worker owns the provider and never writes command output.
+        var task = Task.Run(async () =>
+        {
+            token.ThrowIfCancellationRequested();
+            using var provider = providerFactory(configuration);
+            return await operation(provider, token).ConfigureAwait(false);
+        }, token);
+        try
+        {
+            var result = await task.WaitAsync(token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            _ = task.ContinueWith(static faulted => { _ = faulted.Exception; },
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            throw;
+        }
+    }
+
+    private static bool IsOperationFailure(Exception exception) =>
+        exception is OperationCanceledException || MarketErrorMapper.IsProviderFailure(exception);
+
+    private static MarketError MapOperationFailure(
+        Exception exception, CancellationToken callerToken, CancellationToken timeoutToken) =>
+        callerToken.IsCancellationRequested
+            ? MarketErrorMapper.FromProviderException(new OperationCanceledException(callerToken))
+            : MarketErrorMapper.FromProviderException(exception,
+                timedOut: timeoutToken.IsCancellationRequested || exception is OperationCanceledException);
 
     private async Task<int> WriteQuoteFailureAsync(
         IReadOnlyList<SymbolInput> symbols,

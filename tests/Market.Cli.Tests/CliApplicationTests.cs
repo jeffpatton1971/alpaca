@@ -5,6 +5,121 @@ namespace Market.Cli.Tests;
 
 public sealed class CliApplicationTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task BlockedProviderCannotPreventDeadlineOrCallerCancellation(bool doctor, bool cancel)
+    {
+        using var caller = new CancellationTokenSource();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var provider = new BlockedProvider();
+        var app = new CliApplication(TestData.Environment(), output, error, _ => provider,
+            TimeProvider.System, cancel ? TimeSpan.FromSeconds(10) : TimeSpan.FromMilliseconds(500));
+
+        var command = app.RunAsync(Arguments(doctor), caller.Token);
+        try
+        {
+            await provider.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (cancel)
+            {
+                caller.Cancel();
+            }
+            Assert.Equal(cancel ? 130 : 4, await command.WaitAsync(TimeSpan.FromSeconds(5)));
+            AssertFailureJson(output.ToString(), doctor, cancel ? "REQUEST_CANCELLED" : "NETWORK_TIMEOUT");
+        }
+        finally
+        {
+            // Simulate a late SDK fault and allow the worker to dispose its provider.
+            provider.Pending.TrySetException(new IOException("late SDK fault"));
+            await provider.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        AssertFailureJson(output.ToString(), doctor, cancel ? "REQUEST_CANCELLED" : "NETWORK_TIMEOUT");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MalformedSdkResponseReturnsSanitizedJsonAndExitFour(bool doctor)
+    {
+        const string privatePayload = "private-payload-synthetic-marker";
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var app = new CliApplication(TestData.Environment(), output, error,
+            _ => AlpacaMarketDataProviderTests.Provider((_, _) =>
+                AlpacaMarketDataProviderTests.Response($"{{\"trades\":{privatePayload}")),
+            TimeProvider.System);
+
+        Assert.Equal(4, await app.RunAsync(Arguments(doctor)));
+        AssertFailureJson(output.ToString(), doctor, "UNEXPECTED_PROVIDER_RESPONSE");
+        Assert.DoesNotContain(privatePayload, output.ToString());
+        Assert.DoesNotContain(privatePayload, error.ToString());
+    }
+
+    [Theory]
+    [InlineData(0, "regular")]
+    [InlineData(1, "pre_market")]
+    [InlineData(2, "after_hours")]
+    [InlineData(3, "closed")]
+    [InlineData(4, "unknown")]
+    public async Task QuoteSerializesExactV1SessionValues(int session, string expected)
+    {
+        using var output = new StringWriter();
+        var provider = new FakeMarketDataProvider
+        {
+            Snapshot = new ProviderSnapshot(TestData.Now, (MarketSession)session,
+                new Dictionary<string, MarketTrade> { ["NVDA"] = new(12m, TestData.Now) },
+                new Dictionary<string, decimal> { ["NVDA"] = 10m })
+        };
+        var app = new CliApplication(TestData.Environment(), output, TextWriter.Null,
+            _ => provider, new FixedTimeProvider(TestData.Now));
+        Assert.Equal(0, await app.RunAsync(Arguments(false)));
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal("1.0", json.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.Equal(expected, json.RootElement.GetProperty("marketSession").GetString());
+    }
+
+    private static string[] Arguments(bool doctor) =>
+        doctor ? ["doctor", "--check-connection", "--json"] : ["quote", "NVDA", "--json"];
+
+    private static void AssertFailureJson(string output, bool doctor, string code)
+    {
+        using var json = JsonDocument.Parse(output);
+        if (doctor)
+        {
+            Assert.Equal("error", json.RootElement.GetProperty("status").GetString());
+            Assert.Contains(json.RootElement.GetProperty("diagnostics").EnumerateArray(), diagnostic =>
+                diagnostic.GetProperty("check").GetString() == "marketDataAccess"
+                && diagnostic.GetProperty("message").GetString()!.StartsWith($"{code}:", StringComparison.Ordinal));
+        }
+        else
+        {
+            Assert.Equal(code, json.RootElement.GetProperty("error").GetProperty("code").GetString());
+        }
+    }
+
+    private sealed class BlockedProvider : IMarketDataProvider
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<ProviderSnapshot> Pending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<ProviderSnapshot> GetSnapshotAsync(IReadOnlyList<string> symbols, MarketDataFeed feed,
+            CancellationToken cancellationToken) => Block();
+
+        public Task CheckConnectivityAsync(MarketDataFeed feed, CancellationToken cancellationToken) => Block();
+
+        private Task<ProviderSnapshot> Block()
+        {
+            Entered.SetResult();
+            return Pending.Task;
+        }
+
+        public void Dispose() => Disposed.TrySetResult();
+    }
+
     [Fact]
     public async Task QuoteWritesOnlyJsonToStdoutAndUsesConfiguredFeed()
     {

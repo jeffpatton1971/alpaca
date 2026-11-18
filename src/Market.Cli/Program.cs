@@ -14,15 +14,8 @@ internal static class Program
 
         try
         {
-            var environment = Environment.GetEnvironmentVariables()
-                .Cast<System.Collections.DictionaryEntry>()
-                .Where(entry => entry.Key is string)
-                .ToDictionary(
-                    entry => (string)entry.Key,
-                    entry => entry.Value?.ToString(),
-                    StringComparer.OrdinalIgnoreCase);
             var application = new CliApplication(
-                environment,
+                MarketConfiguration.ReadEnvironment(),
                 Console.Out,
                 Console.Error,
                 settings => new AlpacaMarketDataProvider(settings),

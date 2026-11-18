@@ -7,6 +7,16 @@ internal static class MarketConfiguration
 {
     private const int DefaultStaleAfterMinutes = 15;
 
+    public static IReadOnlyDictionary<string, string?> ReadEnvironment() =>
+        new Dictionary<string, string?>
+        {
+            ["ALPACA_API_KEY"] = Environment.GetEnvironmentVariable("ALPACA_API_KEY"),
+            ["ALPACA_API_SECRET"] = Environment.GetEnvironmentVariable("ALPACA_API_SECRET"),
+            ["ALPACA_DATA_FEED"] = Environment.GetEnvironmentVariable("ALPACA_DATA_FEED"),
+            ["ALPACA_DATA_URL"] = Environment.GetEnvironmentVariable("ALPACA_DATA_URL"),
+            ["MARKET_STALE_AFTER_MINUTES"] = Environment.GetEnvironmentVariable("MARKET_STALE_AFTER_MINUTES")
+        };
+
     public static ConfigurationResult Load(IReadOnlyDictionary<string, string?> environment)
     {
         var diagnostics = new List<DoctorDiagnostic>();

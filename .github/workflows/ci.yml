@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - run: dotnet restore Market.slnx
+      - run: dotnet restore Market.slnx --locked-mode
       - run: dotnet build Market.slnx --configuration Release --no-restore
       - run: dotnet test Market.slnx --configuration Release --no-build
       - run: dotnet pack src/Market.Cli/Market.Cli.csproj --configuration Release --no-build --output artifacts/packages
