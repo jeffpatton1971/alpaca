@@ -5,13 +5,15 @@
 `market` is a standalone .NET 10 command-line application. Its small internal boundaries are:
 
 - CLI parsing and deterministic exit-code selection;
-- environment configuration and endpoint validation;
+- invocation-scoped feed precedence, environment credentials, and endpoint validation;
 - a read-only market-data provider adapter over `Alpaca.Markets`;
 - symbol normalization and validation;
 - quote assembly, decimal calculations, freshness and session presentation;
 - versioned `System.Text.Json` output and sanitized errors.
 
 The CLI batches symbols where SDK operations allow and preserves the user's normalized symbol order. Provider calls are asynchronous, cancellable, and bounded by a timeout. No database or background service is part of the application.
+
+Quote and doctor share feed-option extraction and an explicit IEX/SIP allowlist. CLI parsing removes option/value tokens before symbol validation. Configuration receives an optional validated feed override and resolves it ahead of the environment and IEX default, without writing configuration. Invalid CLI selections fail before provider creation. [ADR-005](../decisions/ADR-005-invocation-feed-selection.md) defines this additive interface; the provider and v1 output models retain their existing behavior.
 
 ## Provider operations
 

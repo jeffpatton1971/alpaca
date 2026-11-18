@@ -17,6 +17,7 @@ Documentation contract: llamarc42/v0.1
 - [ADR-002: Alpaca read-only adapter](decisions/ADR-002-alpaca-read-only-adapter.md)
 - [ADR-003: versioned JSON](decisions/ADR-003-versioned-market-contract.md)
 - [ADR-004: environment credentials](decisions/ADR-004-environment-credentials.md)
+- [ADR-005: invocation-scoped feed selection](decisions/ADR-005-invocation-feed-selection.md)
 - [Acceptance and verification](quality/acceptance.md)
 - [Risks and limitations](quality/risks.md)
 - [Roadmap](quality/roadmap.md)

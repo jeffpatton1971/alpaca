@@ -6,11 +6,15 @@ namespace Market.Cli.Tests;
 public sealed class CliApplicationTests
 {
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task BlockedProviderCannotPreventDeadlineOrCallerCancellation(bool doctor, bool cancel)
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public async Task BlockedProviderCannotPreventDeadlineOrCallerCancellation(bool doctor, bool cancel, bool overrideFeed)
     {
         using var caller = new CancellationTokenSource();
         using var output = new StringWriter();
@@ -19,7 +23,8 @@ public sealed class CliApplicationTests
         var app = new CliApplication(TestData.Environment(), output, error, _ => provider,
             TimeProvider.System, cancel ? TimeSpan.FromSeconds(10) : TimeSpan.FromMilliseconds(500));
 
-        var command = app.RunAsync(Arguments(doctor), caller.Token);
+        var args = Arguments(doctor);
+        var command = app.RunAsync(overrideFeed ? [.. args, "--feed", "sip"] : args, caller.Token);
         try
         {
             await provider.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -37,6 +42,8 @@ public sealed class CliApplicationTests
             await provider.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
         AssertFailureJson(output.ToString(), doctor, cancel ? "REQUEST_CANCELLED" : "NETWORK_TIMEOUT");
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal(overrideFeed ? "sip" : "iex", json.RootElement.GetProperty("feed").GetString());
     }
 
     [Theory]

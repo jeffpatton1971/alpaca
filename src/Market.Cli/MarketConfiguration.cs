@@ -17,7 +17,9 @@ internal static class MarketConfiguration
             ["MARKET_STALE_AFTER_MINUTES"] = Environment.GetEnvironmentVariable("MARKET_STALE_AFTER_MINUTES")
         };
 
-    public static ConfigurationResult Load(IReadOnlyDictionary<string, string?> environment)
+    public static ConfigurationResult Load(
+        IReadOnlyDictionary<string, string?> environment,
+        MarketDataFeed? feedOverride = null)
     {
         var diagnostics = new List<DoctorDiagnostic>();
         var apiKey = ReadRequired(environment, "ALPACA_API_KEY", diagnostics);
@@ -25,19 +27,21 @@ internal static class MarketConfiguration
 
         var feedText = environment.GetValueOrDefault("ALPACA_DATA_FEED");
         MarketDataFeed? selectedFeed = MarketDataFeed.Iex;
-        if (string.IsNullOrWhiteSpace(feedText))
+        if (feedOverride.HasValue)
+        {
+            selectedFeed = feedOverride.Value;
+            diagnostics.Add(new DoctorDiagnostic("feed", "ok",
+                $"Using CLI-selected {selectedFeed.Value.ToString().ToUpperInvariant()} feed for this invocation."));
+        }
+        else if (string.IsNullOrWhiteSpace(feedText))
         {
             diagnostics.Add(new DoctorDiagnostic("feed", "ok", "Using the default IEX feed."));
         }
-        else if (feedText.Equals("iex", StringComparison.OrdinalIgnoreCase))
+        else if (FeedOption.TryParseValue(feedText, out var environmentFeed))
         {
-            selectedFeed = MarketDataFeed.Iex;
-            diagnostics.Add(new DoctorDiagnostic("feed", "ok", "Configured feed is IEX."));
-        }
-        else if (feedText.Equals("sip", StringComparison.OrdinalIgnoreCase))
-        {
-            selectedFeed = MarketDataFeed.Sip;
-            diagnostics.Add(new DoctorDiagnostic("feed", "ok", "Configured feed is SIP."));
+            selectedFeed = environmentFeed;
+            diagnostics.Add(new DoctorDiagnostic("feed", "ok",
+                $"Configured feed is {environmentFeed.ToString().ToUpperInvariant()}."));
         }
         else
         {

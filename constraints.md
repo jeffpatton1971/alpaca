@@ -5,6 +5,7 @@
 - Use the official `Alpaca.Markets` SDK for typed, explicitly scoped operations; do not add an unrestricted HTTP client.
 - Read API credentials only from `ALPACA_API_KEY` and `ALPACA_API_SECRET`. Never prompt for them, persist them, commit them, or include their values in output, diagnostics, logs, or exceptions.
 - Require HTTPS for any custom market-data endpoint. Never silently substitute an endpoint, feed, or provider.
+- The optional `--feed` is an invocation-only IEX/SIP override; never mutate environment variables or persistent settings. Credentials have no command-line form. Delayed SIP remains outside the approved Stage A scope.
 - Use only read operations necessary for market data and session context. Do not expose trading, account, portfolio, funds, margin, or options operations.
 - Tests, fixtures, and CI use synthetic data and mocked provider interactions, never real credentials.
 
