@@ -11,7 +11,7 @@
 ## Data integrity
 
 - A quote price is a provider-backed latest eligible stock trade, never an unlabeled quote side, midpoint, or bar close.
-- A previous close comes from the previous completed regular session. If its bar is missing, dependent calculations are null.
+- A previous close comes from the regular session immediately preceding that observation's trading date. If the date or exact reference bar is unavailable, dependent calculations are null.
 - Use raw, unadjusted daily bars consistently; do not silently compare adjusted and unadjusted values. Corporate actions can cause discontinuities.
 - Record provider observation time separately from retrieval time and identify the selected feed in every quote response.
 - Staleness, session state, and feed coverage are distinct. An old observation may be returned with an explicit stale indication; it is not represented as a current regular-session price.

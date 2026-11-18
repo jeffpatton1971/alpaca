@@ -72,6 +72,8 @@ In JSON mode stdout contains only JSON; diagnostics are written to stderr. See [
 
 If Alpaca's clock or calendar is unavailable, `quote` preserves available trades as partial results with an `unknown` market session and no previous close. Provider calls are not retried. Quote and doctor connection checks time out after 30 seconds; Ctrl+C cancels them with exit code `130`.
 
+Daily change compares each trade with the regular-session close immediately before that trade's Eastern trading date. For example, Tuesday after-hours trades still compare against Monday's close if Monday was a trading day. The top-level `marketSession` describes the exchange around retrieval, not each trade's session.
+
 ## Build and test
 
 ```text

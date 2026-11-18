@@ -103,10 +103,10 @@ internal sealed class QuoteService(
                     ? new MarketError("PREVIOUS_CLOSE_ZERO", "The previous close is zero; daily change calculations are unavailable.")
                     : null;
 
-        if (hasTrade && trade!.TimestampUtc > retrievedAt)
+        if (hasTrade && (trade!.TimestampUtc == default || trade.TimestampUtc > retrievedAt))
         {
             error = new MarketError("INVALID_OBSERVATION_TIMESTAMP",
-                "The provider observation timestamp is later than the retrieval time.");
+                "The provider observation timestamp is unavailable or later than the retrieval time.");
             hasTrade = false;
             trade = null;
         }

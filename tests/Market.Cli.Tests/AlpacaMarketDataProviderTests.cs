@@ -9,12 +9,149 @@ namespace Market.Cli.Tests;
 
 public sealed class AlpacaMarketDataProviderTests
 {
+    [Theory]
+    [InlineData("2026-06-09T15:00:00Z", "2026-06-09T15:01:00Z", "2026-06-08", "regular")]
+    [InlineData("2026-06-09T12:00:00Z", "2026-06-09T12:01:00Z", "2026-06-08", "pre_market")]
+    [InlineData("2026-06-09T21:00:00Z", "2026-06-09T21:01:00Z", "2026-06-08", "after_hours")]
+    [InlineData("2026-06-09T19:00:00Z", "2026-06-09T21:01:00Z", "2026-06-08", "after_hours")]
+    [InlineData("2026-06-10T12:00:00Z", "2026-06-10T12:01:00Z", "2026-06-09", "pre_market")]
+    [InlineData("2026-09-04T19:00:00Z", "2026-09-05T16:00:00Z", "2026-09-03", "closed")]
+    [InlineData("2026-09-04T19:00:00Z", "2026-09-07T16:00:00Z", "2026-09-03", "closed")]
+    [InlineData("2026-09-08T15:00:00Z", "2026-09-08T15:01:00Z", "2026-09-04", "regular")]
+    [InlineData("2026-06-09T15:00:00Z", "2026-09-08T15:01:00Z", "2026-06-08", "regular")]
+    [InlineData("2026-11-27T18:30:00Z", "2026-11-27T18:31:00Z", "2026-11-25", "after_hours")]
+    [InlineData("2026-03-09T08:30:00Z", "2026-03-09T08:31:00Z", "2026-03-06", "pre_market")]
+    public async Task DailyChangeUsesObservationTradingDate(string trade, string clock, string reference, string session)
+    {
+        string? barQuery = null;
+        using var output = new StringWriter();
+        var app = new CliApplication(TestData.Environment(), output, TextWriter.Null,
+            _ => Provider((uri, _) =>
+            {
+                if (uri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+                {
+                    return TradeResponse(("NVDA", trade), ("MSFT", trade));
+                }
+                barQuery = Uri.UnescapeDataString(uri.Query);
+                var price = barQuery.Contains(reference, StringComparison.Ordinal)
+                    && barQuery.Contains($"start={reference}", StringComparison.Ordinal) ? 100m : 105m;
+                return Bars(null, ("NVDA", reference, price), ("NVDA", trade[..10], 105m));
+            }, (uri, _) => uri.AbsolutePath switch
+            {
+                "/v2/clock" => ClockResponse(clock, session == "regular"),
+                "/v2/calendar" when Uri.UnescapeDataString(uri.Query).Contains(
+                    $"start={DateOnly.ParseExact(trade[..10], "yyyy-MM-dd").AddDays(-14):yyyy-MM-dd}", StringComparison.Ordinal) => TradingDates(
+                    ("2026-03-06", "16:00"), ("2026-03-09", "16:00"),
+                    ("2026-06-08", "16:00"), ("2026-06-09", "16:00"), ("2026-06-10", "16:00"),
+                    ("2026-09-03", "16:00"), ("2026-09-04", "16:00"), ("2026-09-08", "16:00"),
+                    ("2026-11-25", "16:00"), ("2026-11-27", "13:00")),
+                _ => throw new InvalidOperationException()
+            }), new FixedTimeProvider(DateTimeOffset.Parse(clock, System.Globalization.CultureInfo.InvariantCulture)));
+
+        var exit = await app.RunAsync(["quote", "NVDA", "MSFT"]);
+        using var document = JsonDocument.Parse(output.ToString());
+        var root = document.RootElement;
+        Assert.Equal("1.0", root.GetProperty("schemaVersion").GetString());
+        Assert.Equal(session, root.GetProperty("marketSession").GetString());
+        Assert.Equal(1, exit); // MSFT deliberately has no reference bar.
+        Assert.Contains($"start={reference}", barQuery);
+        var quote = root.GetProperty("symbols")[0];
+        Assert.Equal(100m, quote.GetProperty("previousClose").GetDecimal());
+        Assert.Equal(6m, quote.GetProperty("change").GetDecimal());
+        Assert.Equal(6m, quote.GetProperty("changePercent").GetDecimal());
+    }
+
+    [Fact]
+    public async Task MixedObservationDatesUseSeparatePaginatedReferenceBatches()
+    {
+        var requests = new List<string>();
+        using var provider = Provider((uri, _) =>
+        {
+            if (uri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+            {
+                return TradeResponse(("NVDA", "2026-06-09T21:00:00Z"), ("AMD", "2026-06-09T15:00:00Z"),
+                    ("MSFT", "2026-06-10T12:00:00Z"), ("SPY", "2026-06-10T12:00:00Z"));
+            }
+            var query = Uri.UnescapeDataString(uri.Query);
+            requests.Add(query);
+            var firstDate = query.Contains("start=2026-06-08", StringComparison.Ordinal);
+            Assert.Contains(firstDate ? "symbols=NVDA,AMD&" : "symbols=MSFT,SPY&start=2026-06-09", query);
+            return (firstDate, query.Contains("page_token=next", StringComparison.Ordinal)) switch
+            {
+                (true, false) => Bars("next", ("NVDA", "2026-06-08", 100), ("AMD", "2026-06-09", 999)),
+                (true, true) => Bars(null, ("AMD", "2026-06-08", 90)),
+                (false, false) => Bars("next", ("MSFT", "2026-06-09", 105)),
+                (false, true) => Bars(null, ("SPY", "2026-06-09", 102))
+            };
+        }, (uri, _) => TradingResponseForMixedDates(uri));
+        var snapshot = await provider.GetSnapshotAsync(["NVDA", "AMD", "MSFT", "SPY"], MarketDataFeed.Iex, default);
+
+        Assert.Equal(4, requests.Count);
+        Assert.Equal(100m, snapshot.PreviousCloses["NVDA"]);
+        Assert.Equal(90m, snapshot.PreviousCloses["AMD"]);
+        Assert.Equal(105m, snapshot.PreviousCloses["MSFT"]);
+        Assert.Equal(102m, snapshot.PreviousCloses["SPY"]);
+    }
+
+    private static HttpResponseMessage TradingResponseForMixedDates(Uri uri) => uri.AbsolutePath switch
+    {
+        "/v2/clock" => Response(Clock),
+        "/v2/calendar" => TradingDates(("2026-06-08", "16:00"), ("2026-06-09", "16:00"), ("2026-06-10", "16:00")),
+        _ => throw new InvalidOperationException()
+    };
+
+    [Theory]
+    [InlineData("2026-06-09T15:00:00Z", false, false)] // Empty calendar.
+    [InlineData("2026-06-08T15:00:00Z", true, false)] // Observation date absent.
+    [InlineData("2026-06-09T07:59:59Z", true, false)] // Before listed premarket window.
+    [InlineData("2026-06-10T15:01:00Z", true, true)] // Future timestamp.
+    [InlineData("0001-01-01T00:00:00Z", true, true)] // Unavailable timestamp sentinel.
+    public async Task UnassociatedOrInvalidTradeDoesNotRequestAReferenceBar(string timestamp, bool calendar, bool invalid)
+    {
+        using var output = new StringWriter();
+        var app = new CliApplication(TestData.Environment(), output, TextWriter.Null,
+            _ => Provider((uri, _) =>
+            {
+                Assert.EndsWith("/trades/latest", uri.AbsolutePath);
+                return TradeResponse(("NVDA", timestamp));
+            }, (uri, _) => uri.AbsolutePath == "/v2/calendar" && !calendar
+                ? TradingDates() : TradingResponse(uri)), new FixedTimeProvider(TestData.Now));
+        Assert.Equal(1, await app.RunAsync(["quote", "NVDA"]));
+        using var json = JsonDocument.Parse(output.ToString());
+        var quote = json.RootElement.GetProperty("symbols")[0];
+        Assert.Equal(invalid ? JsonValueKind.Null : JsonValueKind.Number, quote.GetProperty("price").ValueKind);
+        Assert.Equal(JsonValueKind.Null, quote.GetProperty("previousClose").ValueKind);
+        Assert.Equal(JsonValueKind.Null, quote.GetProperty("change").ValueKind);
+        Assert.Equal(JsonValueKind.Null, quote.GetProperty("changePercent").ValueKind);
+        Assert.Equal(invalid ? "INVALID_OBSERVATION_TIMESTAMP" : "PREVIOUS_CLOSE_UNAVAILABLE",
+            quote.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    private static HttpResponseMessage TradeResponse(params (string Symbol, string Time)[] entries) =>
+        Response(JsonSerializer.Serialize(new
+        {
+            trades = entries.ToDictionary(entry => entry.Symbol, entry => new { p = 106, t = entry.Time, s = 1 })
+        }));
+
+    private static HttpResponseMessage ClockResponse(string timestamp, bool open) =>
+        Response(JsonSerializer.Serialize(new
+        {
+            timestamp, is_open = open, next_open = timestamp, next_close = timestamp
+        }));
+
+    private static HttpResponseMessage TradingDates(params (string Date, string Close)[] entries) =>
+        Response(JsonSerializer.Serialize(entries.Select(entry => new
+        {
+            date = entry.Date, open = "09:30", close = entry.Close, session_open = "0400", session_close = "2000"
+        })));
+
     private const string Trades = """{"trades":{"NVDA":{"p":12,"t":"2026-06-10T14:59:55Z","s":1}}}""";
     private const string Clock = """
         {"timestamp":"2026-06-10T15:00:00Z","is_open":true,"next_open":"2026-06-11T13:30:00Z","next_close":"2026-06-10T20:00:00Z"}
         """;
     private const string Calendar = """
-        [{"date":"2026-06-09","open":"09:30","close":"16:00","session_open":"0400","session_close":"2000"}]
+        [{"date":"2026-06-09","open":"09:30","close":"16:00","session_open":"0400","session_close":"2000"},
+         {"date":"2026-06-10","open":"09:30","close":"16:00","session_open":"0400","session_close":"2000"}]
         """;
 
     [Theory]
@@ -139,7 +276,7 @@ public sealed class AlpacaMarketDataProviderTests
         {
             if (uri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
             {
-                return Response(Trades);
+                return TradeResponse(("NVDA", "2026-06-10T14:59:55Z"), ("MSFT", "2026-06-10T14:59:55Z"));
             }
             calls++;
             Assert.Contains("feed=sip", uri.Query);
@@ -161,7 +298,7 @@ public sealed class AlpacaMarketDataProviderTests
         {
             if (uri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
             {
-                return Response("""{"trades":{}}""");
+                return TradeResponse(symbols.Select(symbol => (symbol, "2026-06-10T14:59:55Z")).ToArray());
             }
             return ++calls switch
             {
@@ -245,7 +382,7 @@ public sealed class AlpacaMarketDataProviderTests
         {
             bars = entries.GroupBy(x => x.Symbol).ToDictionary(group => group.Key, group => group.Select(x => new
             {
-                t = $"{x.Date}T04:00:00Z", o = x.Close, c = x.Close, h = x.Close, l = x.Close, v = 1
+                t = $"{x.Date}T05:00:00Z", o = x.Close, c = x.Close, h = x.Close, l = x.Close, v = 1
             })),
             next_page_token = token
         }));

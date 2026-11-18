@@ -6,5 +6,6 @@
 - Add versioned JSON output, feed/session/freshness provenance, diagnostics, and mocked tests.
 - Establish LlamaRC42 v0.1 project requirements, architecture, decisions, and verification criteria.
 - Fix SDK retries, previous-close pagination, partial quotes, timeout and cancellation handling, and malformed-response diagnostics. Correct Unix startup and the v1 extended-hours session strings.
+- Anchor daily change to each trade's date rather than the retrieval date, including after-hours and stale observations.
 
 No package has been published and no release has been created.

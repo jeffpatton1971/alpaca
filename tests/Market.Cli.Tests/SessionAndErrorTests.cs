@@ -38,14 +38,14 @@ public sealed class SessionAndErrorTests
     }
 
     [Fact]
-    public void SelectsTheMostRecentRegularSessionThatHasClosed()
+    public void SelectsPriorRegularSessionOnBothSidesOfObservationDatesClose()
     {
         var earlier = Timing(new DateOnly(2026, 6, 9), 20);
         var current = Timing(new DateOnly(2026, 6, 10), 20);
         var timestamp = current.RegularCloseUtc.AddTicks(-1);
 
-        Assert.Equal(earlier.Date, MarketSessionClassifier.PreviousCompletedSession(timestamp, [earlier, current])!.Date);
-        Assert.Equal(current.Date, MarketSessionClassifier.PreviousCompletedSession(
+        Assert.Equal(earlier.Date, MarketSessionClassifier.ReferenceSession(timestamp, [earlier, current])!.Date);
+        Assert.Equal(earlier.Date, MarketSessionClassifier.ReferenceSession(
             current.RegularCloseUtc, [earlier, current])!.Date);
     }
 

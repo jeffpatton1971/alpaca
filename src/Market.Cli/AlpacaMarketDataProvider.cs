@@ -8,6 +8,7 @@ internal sealed class AlpacaMarketDataProvider : IMarketDataProvider
     private const int MaxSymbolsPerRequest = 1000;
     private const int MaxPagesPerBatch = 2048;
     private const int MaxPageTokenLength = 4096;
+    private const int CalendarLookbackDays = 14;
 
     private readonly IAlpacaDataClient _dataClient;
     private readonly IAlpacaTradingClient _tradingClient;
@@ -47,35 +48,51 @@ internal sealed class AlpacaMarketDataProvider : IMarketDataProvider
         cancellationToken.ThrowIfCancellationRequested();
         DateTimeOffset clockTimestamp = default;
         MarketSession marketSession;
-        SessionTiming? completedSession;
+        SessionTiming[] sessions;
         try
         {
             var clock = await _tradingClient.GetClockAsync(cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             clockTimestamp = MarketTime.AsUtc(clock.TimestampUtc);
             var currentDate = MarketTime.EasternDate(clockTimestamp);
+            var earliestDate = trades.Values
+                .Where(trade => trade.TimestampUtc != default && trade.TimestampUtc <= clockTimestamp)
+                .Select(trade => MarketTime.EasternDate(trade.TimestampUtc))
+                .Append(currentDate)
+                .Min();
+            var start = earliestDate.AddDays(-Math.Min(CalendarLookbackDays, earliestDate.DayNumber));
             var calendar = await _tradingClient.ListIntervalCalendarAsync(
-                new CalendarRequest(currentDate.AddDays(-14), currentDate.AddDays(1)),
+                new CalendarRequest(start, currentDate),
                 cancellationToken).ConfigureAwait(false);
-            var sessions = calendar.Select(ToSessionTiming).ToArray();
+            sessions = calendar.Select(ToSessionTiming).OrderBy(session => session.Date).ToArray();
             marketSession = MarketSessionClassifier.Resolve(clockTimestamp, clock.IsOpen, sessions);
-            completedSession = MarketSessionClassifier.PreviousCompletedSession(clockTimestamp, sessions);
         }
         catch (Exception exception) when (MarketErrorMapper.IsProviderFailure(exception))
         {
             marketSession = MarketSession.Unknown;
-            completedSession = null;
+            sessions = [];
         }
 
         cancellationToken.ThrowIfCancellationRequested();
         var previousClose = new Dictionary<string, decimal>(StringComparer.Ordinal);
-        if (completedSession is not null)
+        var references = symbols
+            .Where(symbol => trades.TryGetValue(symbol, out var trade)
+                && trade.TimestampUtc != default && trade.TimestampUtc <= clockTimestamp)
+            .Select(symbol => (Symbol: symbol, Reference: MarketSessionClassifier.ReferenceSession(
+                trades[symbol].TimestampUtc, sessions)))
+            .Where(entry => entry.Reference is not null)
+            .GroupBy(entry => entry.Reference!.Date, entry => entry.Symbol);
+        foreach (var group in references)
         {
-            previousClose = await GetPreviousClosesAsync(
-                symbols,
-                completedSession.Date,
+            var closes = await GetPreviousClosesAsync(
+                group.ToArray(),
+                group.Key,
                 feed,
                 cancellationToken).ConfigureAwait(false);
+            foreach (var (symbol, close) in closes)
+            {
+                previousClose.Add(symbol, close);
+            }
         }
 
         return new ProviderSnapshot(clockTimestamp, marketSession, trades, previousClose);

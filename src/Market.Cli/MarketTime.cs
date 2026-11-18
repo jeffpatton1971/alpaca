@@ -76,11 +76,32 @@ internal static class MarketSessionClassifier
         return MarketSession.Closed;
     }
 
-    public static SessionTiming? PreviousCompletedSession(
-        DateTimeOffset timestampUtc,
-        IReadOnlyCollection<SessionTiming> sessions) =>
-        sessions
-            .Where(session => session.RegularCloseUtc <= timestampUtc)
-            .OrderByDescending(session => session.RegularCloseUtc)
-            .FirstOrDefault();
+    public static SessionTiming? ReferenceSession(
+        DateTimeOffset observation,
+        IReadOnlyList<SessionTiming> orderedSessions)
+    {
+        var date = MarketTime.EasternDate(observation);
+        for (var index = 1; index < orderedSessions.Count; index++)
+        {
+            var session = orderedSessions[index];
+            if (session.Date < date)
+            {
+                continue;
+            }
+
+            var prior = orderedSessions[index - 1];
+            return session.Date == date && prior.Date < date
+                && (index + 1 == orderedSessions.Count || orderedSessions[index + 1].Date != date)
+                && (index < 2 || orderedSessions[index - 2].Date != prior.Date)
+                && session.SessionOpenUtc <= session.RegularOpenUtc
+                && session.RegularOpenUtc < session.RegularCloseUtc
+                && session.RegularCloseUtc <= session.SessionCloseUtc
+                && observation >= session.SessionOpenUtc && observation < session.SessionCloseUtc
+                && prior.RegularOpenUtc < prior.RegularCloseUtc && prior.RegularCloseUtc <= observation
+                ? prior
+                : null;
+        }
+
+        return null;
+    }
 }

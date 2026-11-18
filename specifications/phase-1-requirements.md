@@ -37,7 +37,7 @@ Ticker syntax is one to ten ASCII letters/digits, with optional interior `.` or 
 
 - `price` is the latest eligible provider stock trade. It is not a bid, ask, midpoint, or daily-bar close.
 - `priceType` is `last_trade`; the actual trade timestamp is authoritative.
-- `previousClose` is the close of the previous completed regular trading session, not necessarily the previous calendar date.
+- `previousClose` is the raw close of the regular trading session immediately before the observation's trading date. Associate each trade with its own date and regular or extended-hours window in Alpaca's Eastern-time calendar. Premarket, regular, and after-hours trades on the same trading date use the same reference close, even if retrieved on a later day. If the trade cannot be associated with a trading date or its reference bar is unavailable, the comparison fields are null.
 - Daily bars use the `raw` adjustment basis. This preserves price units consistently but does not remove split/dividend discontinuities.
 - `change = price - previousClose`.
 - `changePercent = (change / previousClose) * 100`.
@@ -50,7 +50,7 @@ The configured feed is explicit and is never silently switched. IEX reflects a l
 
 All instants are UTC; the user-facing observation time is also rendered in `America/Chicago`, including daylight-saving offsets. `retrievedAtUtc` is distinct from the provider observation timestamp.
 
-The session is one of `regular`, `pre_market`, `after_hours`, `closed`, or `unknown`. Prefer Alpaca's clock/calendar and its session schedule, including holidays and early closures. If that information cannot be established reliably, use `unknown`; request time is not a substitute for observation session.
+Top-level `marketSession` describes the exchange around retrieval, using Alpaca's clock and calendar, and is one of `regular`, `pre_market`, `after_hours`, `closed`, or `unknown`. If that information cannot be established reliably, use `unknown`. It does not describe any individual observation or determine its trading date. The v1 response does not expose a per-symbol session or reference date.
 
 The initial freshness threshold is 15 minutes and is configurable through `MARKET_STALE_AFTER_MINUTES`. `quoteAgeSeconds` is the elapsed UTC duration from the provider trade timestamp to retrieval time, truncated to whole seconds; `isStale` is true only when the exact elapsed duration exceeds the configured threshold. A provider observation timestamp later than retrieval is rejected. Staleness says nothing by itself about whether a feed is consolidated or a market is open. An out-of-session observation may be returned with its timestamp and freshness state.
 
