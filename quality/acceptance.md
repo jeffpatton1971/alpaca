@@ -29,11 +29,27 @@
 - Verify selected-feed provenance on success and configuration/provider failures, both quote/doctor SDK requests, no fallback, and offline doctor behavior. Preserve all v1 properties, nulls, raw-age freshness, symbol order/limit, deadlines, cancellation, and sanitization.
 - Run existing home v1 validation against synthetic outputs without modifying home, its pins, or its settings. Run locked restore, Release build, all tests, actual Core documentation validation, and isolated package installation from outside the repository.
 
+### Stage B delayed SIP checks
+
+- Verify feed/schema options together, including malformed cross-option ordering, canonical names, unchanged precedence, explicit 1.1 opt-in, safe failures, offline doctor, and invocation isolation.
+- Verify SDK requests use delayed SIP for latest data and SIP/raw for every historical page, with observation-relative dates and a historical end outside the recent-data restriction. Cover authorization failures without fallback at either endpoint.
+- Verify schema 1.0 omits all new properties and retains existing values/nulls; schema 1.1 includes policy metadata and nullable derived fields on success and failures. Exercise raw/excess-age boundaries at subsecond precision, missing/future timestamps, closed markets, DST, early closes, and mixed reference dates. Repeat deadlines/cancellation with delayed selection.
+- Run locked restore, Release build, full tests, actual Core validator, isolated installed-tool checks, and unchanged home consumer validation. Keep live entitlement testing, home changes, publication, and merge excluded.
+
 ## Evidence discipline
 
 Record command and outcome for each performed check. Distinguish compile-time, mocked, package-install, and live-provider evidence. A proposed future capability or successful build is not evidence that a live data request works.
 
 ## Verification evidence
+
+### Stage B delayed SIP and schema 1.1 — November 19, 2026
+
+- Owner approval covers implementation and a review PR from merged main `cec1cad83a23dcbc1a6a9281da70f6d0ea96e89f`. Accepted ADR-006 and requirements preceded code changes. SDK/package versions and CI configuration are unchanged. No live Alpaca requests, home changes, automation settings changes, publication, or merge were performed.
+- With .NET SDK 10.0.404, `dotnet restore Market.slnx --locked-mode --configfile <isolated NuGet.org config>`, `dotnet build Market.slnx --configuration Release --no-restore`, and `dotnet test Market.slnx --configuration Release --no-build --no-restore` passed: zero build warnings/errors and 244 tests. The suite covers delayed latest requests, explicit SIP/raw historical requests, pagination, observation-relative dates across weekends/holidays/DST/early closes, the recent-data cutoff, authorization failures at both endpoints without fallback, schema selection/errors, canonical provenance, full-precision freshness boundaries/nulls, and delayed quote/doctor deadlines/cancellation.
+- A newly added malformed-ordering regression exposed two failures in an initial two-pass parser: removing feed tokens could repair a missing schema value. A single-pass invocation parser preserves original adjacency and corrected both cases. The final full suite passed, including existing Stage A/P2 regressions. This was a local development finding, not a change to the approved interface.
+- `dotnet pack src/Market.Cli/Market.Cli.csproj --configuration Release --no-build --no-restore` succeeded. A fresh local-source/cache/tool-path installation passed all 14 checks outside the repository: help/version, existing IEX/SIP behavior, rejected delayed selection without opt-in, schema 1.1 offline doctor, credential-free delayed quote failure with metadata, malformed feed/schema values and assignments, and cross-option ordering. Synthetic credentials were used only for offline doctor; no connection check or authenticated quote was made.
+- The external synthetic CLI harness regenerated five schema 1.0 responses (environment, override, stale, partial, provider error). All five were byte-identical to the Stage A fixtures and passed home's unchanged `Read-Observation` validator with the expected complete/degraded classifications. The validator blob matched `03b31c72ca689d284b4752775caf39025519e568`; home was read only.
+- Ran the actual pinned LlamaRC42 Core `DocumentationValidator.Validate` API (`67d0c8edba57baf1bd6d25a9fbd5b1dcae5ae267`) through the isolated validation host after final documentation updates: `llamarc42/v0.1: Valid`, no diagnostics/tool errors. `git diff --check` passed. Account entitlement remains unverified and requires separate live-test approval.
 
 ### PR #2 flag-like feed value correction — November 19, 2026
 

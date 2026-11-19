@@ -2,6 +2,7 @@
 
 ## 0.1.0 - Unreleased
 
+- Add opt-in schema 1.1 and delayed SIP selection, with explicit historical SIP mapping, canonical feed names, nominal delay, and excess-age metadata. Keep schema 1.0 and raw freshness unchanged; no live entitlement or home adoption is claimed.
 - Add optional `--feed iex|sip` to quote and doctor with invocation-only CLI, environment, then IEX-default precedence. Preserve schema 1.0 and existing freshness/provider behavior; delayed SIP is not enabled.
 - Exclude malformed option-like feed values and assignments from quote-error symbols and summary counts while retaining explicit usage errors.
 

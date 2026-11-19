@@ -23,56 +23,74 @@ public sealed class AlpacaMarketDataProviderTests
     [InlineData("2026-03-09T08:30:00Z", "2026-03-09T08:31:00Z", "2026-03-06", "pre_market")]
     public async Task DailyChangeUsesObservationTradingDate(string trade, string clock, string reference, string session)
     {
-        string? barQuery = null;
-        using var output = new StringWriter();
-        var app = new CliApplication(TestData.Environment(), output, TextWriter.Null,
-            _ => Provider((uri, _) =>
-            {
-                if (uri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+        foreach (var delayed in new[] { false, true })
+        {
+            string? barQuery = null;
+            using var output = new StringWriter();
+            var app = new CliApplication(TestData.Environment(), output, TextWriter.Null,
+                _ => Provider((uri, _) =>
                 {
-                    return TradeResponse(("NVDA", trade), ("MSFT", trade));
-                }
-                barQuery = Uri.UnescapeDataString(uri.Query);
-                var price = barQuery.Contains(reference, StringComparison.Ordinal)
-                    && barQuery.Contains($"start={reference}", StringComparison.Ordinal) ? 100m : 105m;
-                return Bars(null, ("NVDA", reference, price), ("NVDA", trade[..10], 105m));
-            }, (uri, _) => uri.AbsolutePath switch
-            {
-                "/v2/clock" => ClockResponse(clock, session == "regular"),
-                "/v2/calendar" when Uri.UnescapeDataString(uri.Query).Contains(
-                    $"start={DateOnly.ParseExact(trade[..10], "yyyy-MM-dd").AddDays(-14):yyyy-MM-dd}", StringComparison.Ordinal) => TradingDates(
-                    ("2026-03-06", "16:00"), ("2026-03-09", "16:00"),
-                    ("2026-06-08", "16:00"), ("2026-06-09", "16:00"), ("2026-06-10", "16:00"),
-                    ("2026-09-03", "16:00"), ("2026-09-04", "16:00"), ("2026-09-08", "16:00"),
-                    ("2026-11-25", "16:00"), ("2026-11-27", "13:00")),
-                _ => throw new InvalidOperationException()
-            }), new FixedTimeProvider(DateTimeOffset.Parse(clock, System.Globalization.CultureInfo.InvariantCulture)));
+                    if (uri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
+                    {
+                        Assert.Contains(delayed ? "feed=delayed_sip" : "feed=iex", uri.Query);
+                        return TradeResponse(("NVDA", trade), ("MSFT", trade));
+                    }
+                    barQuery = Uri.UnescapeDataString(uri.Query);
+                    Assert.Contains(delayed ? "feed=sip" : "feed=iex", barQuery);
+                    Assert.Contains("adjustment=raw", barQuery);
+                    if (delayed)
+                    {
+                        var endText = barQuery.Split('&').Single(part => part.StartsWith("end=", StringComparison.Ordinal))[4..];
+                        Assert.True(DateTimeOffset.Parse(endText) <= DateTimeOffset.Parse(clock).AddMinutes(-15));
+                    }
+                    var price = barQuery.Contains(reference, StringComparison.Ordinal)
+                        && barQuery.Contains($"start={reference}", StringComparison.Ordinal) ? 100m : 105m;
+                    return Bars(null, ("NVDA", reference, price), ("NVDA", trade[..10], 105m));
+                }, (uri, _) => uri.AbsolutePath switch
+                {
+                    "/v2/clock" => ClockResponse(clock, session == "regular"),
+                    "/v2/calendar" when Uri.UnescapeDataString(uri.Query).Contains(
+                        $"start={DateOnly.ParseExact(trade[..10], "yyyy-MM-dd").AddDays(-14):yyyy-MM-dd}", StringComparison.Ordinal) => TradingDates(
+                        ("2026-03-06", "16:00"), ("2026-03-09", "16:00"),
+                        ("2026-06-08", "16:00"), ("2026-06-09", "16:00"), ("2026-06-10", "16:00"),
+                        ("2026-09-03", "16:00"), ("2026-09-04", "16:00"), ("2026-09-08", "16:00"),
+                        ("2026-11-25", "16:00"), ("2026-11-27", "13:00")),
+                    _ => throw new InvalidOperationException()
+                }), new FixedTimeProvider(DateTimeOffset.Parse(clock, System.Globalization.CultureInfo.InvariantCulture)));
 
-        var exit = await app.RunAsync(["quote", "NVDA", "MSFT"]);
-        using var document = JsonDocument.Parse(output.ToString());
-        var root = document.RootElement;
-        Assert.Equal("1.0", root.GetProperty("schemaVersion").GetString());
-        Assert.Equal(session, root.GetProperty("marketSession").GetString());
-        Assert.Equal(1, exit); // MSFT deliberately has no reference bar.
-        Assert.Contains($"start={reference}", barQuery);
-        var quote = root.GetProperty("symbols")[0];
-        Assert.Equal(100m, quote.GetProperty("previousClose").GetDecimal());
-        Assert.Equal(6m, quote.GetProperty("change").GetDecimal());
-        Assert.Equal(6m, quote.GetProperty("changePercent").GetDecimal());
+            string[] args = ["quote", "NVDA", "MSFT"];
+            if (delayed) args = [.. args, "--feed", "delayed_sip", "--schema-version", "1.1"];
+            var exit = await app.RunAsync(args);
+            using var document = JsonDocument.Parse(output.ToString());
+            var root = document.RootElement;
+            Assert.Equal(delayed ? "1.1" : "1.0", root.GetProperty("schemaVersion").GetString());
+            Assert.Equal(session, root.GetProperty("marketSession").GetString());
+            Assert.Equal(1, exit); // MSFT deliberately has no reference bar.
+            Assert.Contains($"start={reference}", barQuery);
+            var quote = root.GetProperty("symbols")[0];
+            Assert.Equal(100m, quote.GetProperty("previousClose").GetDecimal());
+            Assert.Equal(6m, quote.GetProperty("change").GetDecimal());
+            Assert.Equal(6m, quote.GetProperty("changePercent").GetDecimal());
+        }
     }
 
-    [Fact]
-    public async Task MixedObservationDatesUseSeparatePaginatedReferenceBatches()
+    [Theory]
+    [InlineData(MarketDataFeed.Iex)]
+    [InlineData(MarketDataFeed.DelayedSip)]
+    public async Task MixedObservationDatesUseSeparatePaginatedReferenceBatches(MarketDataFeed feed)
     {
         var requests = new List<string>();
         using var provider = Provider((uri, _) =>
         {
             if (uri.AbsolutePath.EndsWith("/latest", StringComparison.Ordinal))
             {
+                Assert.Contains($"feed={FeedNames.Canonical(feed)}", uri.Query);
                 return TradeResponse(("NVDA", "2026-06-09T21:00:00Z"), ("AMD", "2026-06-09T15:00:00Z"),
                     ("MSFT", "2026-06-10T12:00:00Z"), ("SPY", "2026-06-10T12:00:00Z"));
             }
             var query = Uri.UnescapeDataString(uri.Query);
+            Assert.Contains($"feed={FeedNames.Canonical(FeedNames.Historical(feed))}", query);
+            Assert.Contains("adjustment=raw", query);
             requests.Add(query);
             var firstDate = query.Contains("start=2026-06-08", StringComparison.Ordinal);
             Assert.Contains(firstDate ? "symbols=NVDA,AMD&" : "symbols=MSFT,SPY&start=2026-06-09", query);
@@ -84,7 +102,7 @@ public sealed class AlpacaMarketDataProviderTests
                 (false, true) => Bars(null, ("SPY", "2026-06-09", 102))
             };
         }, (uri, _) => TradingResponseForMixedDates(uri));
-        var snapshot = await provider.GetSnapshotAsync(["NVDA", "AMD", "MSFT", "SPY"], MarketDataFeed.Iex, default);
+        var snapshot = await provider.GetSnapshotAsync(["NVDA", "AMD", "MSFT", "SPY"], feed, default);
 
         Assert.Equal(4, requests.Count);
         Assert.Equal(100m, snapshot.PreviousCloses["NVDA"]);

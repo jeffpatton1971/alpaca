@@ -31,7 +31,7 @@ Ticker syntax is one to ten ASCII letters/digits, with optional interior `.` or 
 
 ### Optional feed selection (Stage A)
 
-Both commands accept one optional two-token `--feed VALUE` after the command name, before, between, or after other command arguments. Only `iex` and `sip` are supported, with case-insensitive values and canonical lowercase JSON output. The option name is case-sensitive. Feed values are not symbols and never appear in symbol results.
+Both commands accept one optional two-token `--feed VALUE` after the command name, before, between, or after other command arguments. Stage A introduced `iex` and `sip`, with case-insensitive values and canonical lowercase JSON output; Stage B's extension is below. The option name is case-sensitive. Feed values are not symbols and never appear in symbol results.
 
 Resolve the feed in this order: explicit `--feed`, then `ALPACA_DATA_FEED`, then `iex`. An absent or whitespace-only environment value selects the default. A valid CLI value overrides even an invalid environment feed; other configuration still requires validation. The override affects only this invocation and never writes to the environment or persistent settings.
 
@@ -41,11 +41,34 @@ Quote failures retain the v1 quote envelope and default JSON output. An invalid 
 
 Option-like tokens beginning with `--`, including malformed feed values and assignments, never become quote symbols or contribute to summary counts. Keep these tokens available for option validation so they still fail explicitly; recognized options such as `--json` retain their behavior. This clarifies the existing symbol/error contract without changing schema 1.0.
 
-`delayed_sip`, other SDK feeds, aliases, and numeric enum values remain unsupported. Delayed-data semantics and schema changes require separate approval; see [ADR-005](../decisions/ADR-005-invocation-feed-selection.md).
+Stage B extends these rules as specified below; other SDK feeds, aliases, and numeric enum values remain unsupported.
+
+### Delayed SIP and schema selection (Stage B)
+
+Under accepted [ADR-006](../decisions/ADR-006-delayed-sip-schema-1-1.md), both commands additionally accept case-insensitive `delayed_sip` from CLI or environment, with canonical lowercase/underscore output. Existing precedence and validation remain unchanged. A valid IEX/SIP CLI override of delayed environment selection still works with default schema 1.0.
+
+Accept one optional two-token `--schema-version 1.0|1.1` anywhere after the command name, in either command, independently of feed-option order. No environment schema setting exists. Default is 1.0. Missing, empty, padded, unsupported, duplicate, equals-form, and root-level options are usage errors (exit 2), with no rejected values echoed or serialized as symbols. Invalid/ambiguous schema options report schema 1.0; a valid 1.1 selection also applies to other command usage/configuration/provider failures. Root-level unknown-command errors retain schema 1.0. Help/version behavior is unchanged.
+
+An effective delayed SIP selection requires explicit schema 1.1, including offline doctor. Otherwise return `INVALID_ARGUMENTS`, exit 2, before provider creation, even if credentials are missing. A quote response to this incompatible combination retains schema 1.0 with `feed: null` so the old schema never claims a supported delayed selection. A valid 1.1 selection preserves delayed provenance on configuration/provider failures. Malformed feed input leaves feed metadata null. Other configuration validation and exit codes remain unchanged.
+
+For delayed SIP, latest-trade requests and doctor SPY probes use `delayed_sip`; historical prior-session bars explicitly use `sip` with raw adjustment. Retain the observation-relative reference session, batching, and bounded pagination. Only send historical windows ending at least 15 minutes before the provider clock; if that condition cannot be established, leave the comparison unavailable without shifting its date. IEX/SIP mapping is unchanged. No feed fallback follows any error. Offline doctor does not establish entitlement; the connectivity probe establishes only latest-trade access, not historical-bar access.
+
+Schema 1.1 preserves every existing field's meaning and adds:
+
+| Location | Field | Meaning |
+| --- | --- | --- |
+| Quote and normal doctor envelopes | `previousCloseFeed` | Selected historical request policy: `sip` for delayed SIP, otherwise the selected feed; null if unknown. |
+| Quote and normal doctor envelopes | `expectedDelaySeconds` | Nominal delay, 900 for delayed SIP or 0 for IEX/SIP; null if unknown. This is not measured latency or proof of access. |
+| Each quote symbol | `excessAgeSeconds` | Floor of max(0, actual trade age minus nominal delay), or null for unavailable/invalid timestamps. |
+| Each quote symbol | `isStaleBeyondExpectedDelay` | Full-precision excess age strictly exceeds `MARKET_STALE_AFTER_MINUTES`; null with no valid timestamp. |
+
+Keep raw `quoteAgeSeconds` and `isStale` unchanged. At the default threshold a delayed 901-second-old trade is raw-stale, has one excess second, and is not stale beyond the expected delay. Exactly 1,800 seconds is not beyond the threshold; 1,800 seconds plus one tick is. Neither age measure changes success/partial/error status. Delay-adjusted age is not a provider-health diagnosis; closed-market observations may remain old. Metadata fields remain present with null values where required in schema 1.1 and are entirely absent from schema 1.0. Normal doctor includes feed-policy metadata; its usage-error envelope retains only schema/provider/error.
+
+Home remains pinned/configured separately and is not upgraded to consume schema 1.1 or delayed SIP by this work. Live entitlement verification remains separately authorized.
 
 ## 3. Authentication and endpoint
 
-`ALPACA_API_KEY` and `ALPACA_API_SECRET` are required for authenticated data calls. The optional `--feed` overrides `ALPACA_DATA_FEED`; both select only `iex` or `sip`, with `iex` as the default. The response always identifies the selected feed when valid. An unauthorized feed is a structured failure, not a reason to downgrade.
+`ALPACA_API_KEY` and `ALPACA_API_SECRET` are required for authenticated data calls. The optional `--feed` overrides `ALPACA_DATA_FEED`; both select `iex`, `sip`, or `delayed_sip`, with `iex` as the default and delayed SIP gated on schema 1.1. The response identifies the selected feed when valid for its schema. An unauthorized feed is a structured failure, not a reason to downgrade.
 
 `ALPACA_DATA_URL` is optional. The SDK's documented default is used when unset. A configured endpoint must be a validated HTTPS URL and must be applied through a supported SDK configuration mechanism. Invalid or unsupported configuration fails explicitly. Credentials are never requested interactively or persisted.
 

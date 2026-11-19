@@ -39,22 +39,28 @@ internal sealed class CliApplication(
 
     private async Task<int> RunQuoteAsync(string[] args, CancellationToken cancellationToken)
     {
-        var feedOption = FeedOption.Parse(args);
-        args = feedOption.Arguments;
+        var options = InvocationOptions.Parse(args);
+        args = options.Arguments;
         // Retain options in args for validation, but never serialize them as symbols on failure.
         var symbols = SymbolParser.Parse(args.Where(argument => !argument.StartsWith("--", StringComparison.Ordinal)));
-        var configurationResult = feedOption.Error is null
-            ? MarketConfiguration.Load(environment, feedOption.Override)
+        var configurationResult = options.FeedError is null
+            ? MarketConfiguration.Load(environment, options.FeedOverride)
             : null;
-        var selectedFeed = configurationResult?.Feed?.ToString().ToLowerInvariant();
-        if (feedOption.Error is not null || symbols.Count == 0
+        var selectedFeed = FeedNames.Canonical(configurationResult?.Feed);
+        var selectionError = options.FeedError ?? options.SchemaError;
+        if (selectedFeed == "delayed_sip" && options.SchemaVersion != "1.1")
+        {
+            selectionError ??= new MarketError("INVALID_ARGUMENTS", InvocationOptions.DelayedRequirement);
+            selectedFeed = null;
+        }
+        if (selectionError is not null || symbols.Count == 0
             || args.Any(argument => argument.StartsWith("--", StringComparison.Ordinal)
             && argument != "--json"))
         {
-            var errorResult = feedOption.Error ?? new MarketError("INVALID_ARGUMENTS",
-                "Supply one or more symbols; supported options are --json and --feed iex|sip.");
-            await WriteJsonAsync(QuoteService.CreateFailureResponse(
-                symbols, errorResult, timeProvider.GetUtcNow(), selectedFeed)).ConfigureAwait(false);
+            var errorResult = selectionError ?? new MarketError("INVALID_ARGUMENTS",
+                "Supply one or more symbols; supported options are --json, --feed iex|sip|delayed_sip, and --schema-version 1.0|1.1.");
+            await WriteQuoteJsonAsync(QuoteService.CreateFailureResponse(
+                symbols, errorResult, timeProvider.GetUtcNow(), selectedFeed), options.SchemaVersion).ConfigureAwait(false);
             await error.WriteLineAsync($"market: {errorResult.Code}: {errorResult.Message}").ConfigureAwait(false);
             return 2;
         }
@@ -63,8 +69,8 @@ internal sealed class CliApplication(
         {
             var errorResult = new MarketError("TOO_MANY_SYMBOLS",
                 $"A quote request may contain at most {SymbolParser.MaximumSymbols} distinct symbols.");
-            await WriteJsonAsync(QuoteService.CreateFailureResponse(
-                symbols, errorResult, timeProvider.GetUtcNow(), selectedFeed)).ConfigureAwait(false);
+            await WriteQuoteJsonAsync(QuoteService.CreateFailureResponse(
+                symbols, errorResult, timeProvider.GetUtcNow(), selectedFeed), options.SchemaVersion).ConfigureAwait(false);
             await error.WriteLineAsync($"market: {errorResult.Code}: {errorResult.Message}").ConfigureAwait(false);
             return 2;
         }
@@ -72,8 +78,8 @@ internal sealed class CliApplication(
         if (symbols.All(symbol => !symbol.IsValid))
         {
             var errorResult = new MarketError("INVALID_SYMBOL", "No symbol has a valid US stock or ETF ticker format.");
-            await WriteJsonAsync(QuoteService.CreateFailureResponse(
-                symbols, errorResult, timeProvider.GetUtcNow(), selectedFeed)).ConfigureAwait(false);
+            await WriteQuoteJsonAsync(QuoteService.CreateFailureResponse(
+                symbols, errorResult, timeProvider.GetUtcNow(), selectedFeed), options.SchemaVersion).ConfigureAwait(false);
             await error.WriteLineAsync($"market: {errorResult.Code}: {errorResult.Message}").ConfigureAwait(false);
             return 2;
         }
@@ -85,8 +91,8 @@ internal sealed class CliApplication(
                 symbols,
                 configError,
                 timeProvider.GetUtcNow(),
-                configurationResult.Feed?.ToString().ToLowerInvariant());
-            await WriteJsonAsync(response).ConfigureAwait(false);
+                FeedNames.Canonical(configurationResult.Feed));
+            await WriteQuoteJsonAsync(response, options.SchemaVersion).ConfigureAwait(false);
             await error.WriteLineAsync($"market: {configError.Code}: {configError.Message}").ConfigureAwait(false);
             return MarketErrorMapper.ExitCode(configError);
         }
@@ -99,7 +105,7 @@ internal sealed class CliApplication(
             var response = await RunProviderAsync(configuration, (provider, token) =>
                 new QuoteService(provider, configuration, timeProvider).GetQuotesAsync(symbols, token),
                 linkedSource.Token).ConfigureAwait(false);
-            await WriteJsonAsync(response).ConfigureAwait(false);
+            await WriteQuoteJsonAsync(response, options.SchemaVersion).ConfigureAwait(false);
             foreach (var quote in response.Symbols.Where(quote => quote.Error is not null))
             {
                 await error.WriteLineAsync($"market: {quote.Symbol} {quote.Error!.Code}: {quote.Error.Message}")
@@ -113,7 +119,8 @@ internal sealed class CliApplication(
         catch (Exception exception) when (IsOperationFailure(exception))
         {
             return await WriteQuoteFailureAsync(
-                symbols, MapOperationFailure(exception, cancellationToken, timeoutSource.Token), configuration.Feed)
+                symbols, MapOperationFailure(exception, cancellationToken, timeoutSource.Token), configuration.Feed,
+                options.SchemaVersion)
                 .ConfigureAwait(false);
         }
     }
@@ -121,23 +128,28 @@ internal sealed class CliApplication(
     private async Task<int> RunDoctorAsync(string[] args, CancellationToken cancellationToken)
     {
         var json = args.Contains("--json", StringComparer.Ordinal);
-        var feedOption = FeedOption.Parse(args);
-        if (feedOption.Error is not null)
+        var options = InvocationOptions.Parse(args);
+        if ((options.FeedError ?? options.SchemaError) is { } selectionError)
         {
-            return await WriteUsageErrorAsync(feedOption.Error.Message, json).ConfigureAwait(false);
+            return await WriteUsageErrorAsync(selectionError.Message, json, options.SchemaVersion).ConfigureAwait(false);
         }
 
-        args = feedOption.Arguments;
+        args = options.Arguments;
         var checkConnection = args.Contains("--check-connection", StringComparer.Ordinal);
         if (args.Any(argument => argument.StartsWith("--", StringComparison.Ordinal)
             && argument is not "--json" and not "--check-connection")
             || args.Any(argument => !argument.StartsWith("--", StringComparison.Ordinal)))
         {
-            return await WriteUsageErrorAsync("doctor supports only --json, --check-connection, and --feed iex|sip.", json)
+            return await WriteUsageErrorAsync(
+                "doctor supports only --json, --check-connection, --feed iex|sip|delayed_sip, and --schema-version 1.0|1.1.",
+                json, options.SchemaVersion)
                 .ConfigureAwait(false);
         }
 
-        var result = MarketConfiguration.Load(environment, feedOption.Override);
+        var result = MarketConfiguration.Load(environment, options.FeedOverride);
+        if (result.Feed == MarketDataFeed.DelayedSip && options.SchemaVersion != "1.1")
+            return await WriteUsageErrorAsync(InvocationOptions.DelayedRequirement, json, options.SchemaVersion)
+                .ConfigureAwait(false);
         var diagnostics = result.Diagnostics.ToList();
         MarketError? connectionError = null;
         if (result.IsValid && checkConnection)
@@ -166,10 +178,9 @@ internal sealed class CliApplication(
         if (json)
         {
             await WriteJsonAsync(new DoctorResponse(
-                "1.0",
+                options.SchemaVersion,
                 "alpaca",
-                result.Configuration?.Feed.ToString().ToLowerInvariant()
-                    ?? result.Feed?.ToString().ToLowerInvariant(),
+                FeedNames.Canonical(result.Feed),
                 status,
                 diagnostics)).ConfigureAwait(false);
             if (status == "error")
@@ -233,22 +244,23 @@ internal sealed class CliApplication(
     private async Task<int> WriteQuoteFailureAsync(
         IReadOnlyList<SymbolInput> symbols,
         MarketError marketError,
-        MarketDataFeed feed)
+        MarketDataFeed feed,
+        string schemaVersion)
     {
         var response = QuoteService.CreateFailureResponse(
-            symbols, marketError, timeProvider.GetUtcNow(), feed.ToString().ToLowerInvariant());
-        await WriteJsonAsync(response).ConfigureAwait(false);
+            symbols, marketError, timeProvider.GetUtcNow(), FeedNames.Canonical(feed));
+        await WriteQuoteJsonAsync(response, schemaVersion).ConfigureAwait(false);
         await error.WriteLineAsync($"market: {marketError.Code}: {marketError.Message}").ConfigureAwait(false);
         return MarketErrorMapper.ExitCode(marketError);
     }
 
-    private async Task<int> WriteUsageErrorAsync(string message, bool json)
+    private async Task<int> WriteUsageErrorAsync(string message, bool json, string version = "1.0")
     {
         if (json)
         {
             await WriteJsonAsync(new
             {
-                schemaVersion = "1.0",
+                schemaVersion = version,
                 provider = "alpaca",
                 error = new MarketError("INVALID_ARGUMENTS", message)
             }).ConfigureAwait(false);
@@ -264,6 +276,9 @@ internal sealed class CliApplication(
     private async Task WriteJsonAsync<T>(T value) =>
         await output.WriteLineAsync(JsonOutput.Serialize(value)).ConfigureAwait(false);
 
+    private Task WriteQuoteJsonAsync(QuoteResponse response, string version) =>
+        WriteJsonAsync(response with { SchemaVersion = version });
+
     private static DoctorDiagnostic ToDoctorFailure(MarketError error) =>
         new("marketDataAccess", "error", $"{error.Code}: {error.Message}");
 
@@ -271,16 +286,19 @@ internal sealed class CliApplication(
         market - read-only Alpaca US stock and ETF market-data CLI
 
         Usage:
-          market quote <SYMBOL> [SYMBOL ...] [--feed iex|sip] [--json]
-          market doctor [--feed iex|sip] [--check-connection] [--json]
+          market quote <SYMBOL> [SYMBOL ...] [--feed iex|sip|delayed_sip] [--schema-version 1.0|1.1] [--json]
+          market doctor [--feed iex|sip|delayed_sip] [--schema-version 1.0|1.1] [--check-connection] [--json]
           market --help
           market --version
 
         quote emits versioned JSON by default. Configure ALPACA_API_KEY and
         ALPACA_API_SECRET in the process environment. Feed precedence is
-        --feed, then ALPACA_DATA_FEED, then iex. Values iex and sip are
+        --feed, then ALPACA_DATA_FEED, then iex. Feed values are
         case-insensitive. Use --feed once, after the command name; it affects
-        only this invocation. delayed_sip is not supported. JSON schema 1.0
-        and age-based freshness are unchanged. No trading operations are available.
+        only this invocation. Schema defaults to 1.0; delayed_sip requires
+        --schema-version 1.1. Schema 1.1 adds nominal delay and excess age;
+        raw age and isStale retain their meanings. Delayed latest trades use
+        historical SIP for prior closes. Doctor probes latest-trade access only.
+        No trading operations are available.
         """;
 }

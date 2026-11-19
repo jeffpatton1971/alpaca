@@ -16,6 +16,8 @@ Keep schema 1.0, raw-age freshness, the existing SDK and provider calls, credent
 
 ## Consequences
 
+Stage B disposition: [ADR-006](ADR-006-delayed-sip-schema-1-1.md) extends selection to delayed SIP only with explicit schema 1.1. The Stage A decision above records the original approval; its precedence and invocation-isolation rules remain unchanged.
+
 Existing commands and the pinned home consumer continue to work. Users can select a feed for one invocation, but selection does not establish entitlement. Doctor configuration checks remain offline unless connection checking is explicitly requested. No package publication, release, merge, live provider test, or automation change is authorized by this decision.
 
 ## Related decisions

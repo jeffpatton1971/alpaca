@@ -31,22 +31,22 @@ internal static class MarketConfiguration
         {
             selectedFeed = feedOverride.Value;
             diagnostics.Add(new DoctorDiagnostic("feed", "ok",
-                $"Using CLI-selected {selectedFeed.Value.ToString().ToUpperInvariant()} feed for this invocation."));
+                $"Using CLI-selected {FeedNames.Canonical(selectedFeed)!.ToUpperInvariant()} feed for this invocation."));
         }
         else if (string.IsNullOrWhiteSpace(feedText))
         {
             diagnostics.Add(new DoctorDiagnostic("feed", "ok", "Using the default IEX feed."));
         }
-        else if (FeedOption.TryParseValue(feedText, out var environmentFeed))
+        else if (FeedNames.TryParseValue(feedText, out var environmentFeed))
         {
             selectedFeed = environmentFeed;
             diagnostics.Add(new DoctorDiagnostic("feed", "ok",
-                $"Configured feed is {environmentFeed.ToString().ToUpperInvariant()}."));
+                $"Configured feed is {FeedNames.Canonical(environmentFeed)!.ToUpperInvariant()}."));
         }
         else
         {
             selectedFeed = null;
-            diagnostics.Add(new DoctorDiagnostic("feed", "error", "ALPACA_DATA_FEED must be either iex or sip."));
+            diagnostics.Add(new DoctorDiagnostic("feed", "error", "ALPACA_DATA_FEED must be iex, sip, or delayed_sip."));
         }
 
         var endpoint = Environments.Live.AlpacaDataApi;

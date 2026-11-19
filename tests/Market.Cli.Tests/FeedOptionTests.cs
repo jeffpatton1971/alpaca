@@ -125,7 +125,7 @@ public sealed class FeedOptionTests
     }
 
     [Theory]
-    [InlineData("delayed_sip")]
+    [InlineData("delayedsip")]
     [InlineData("auto")]
     [InlineData(" sip ")]
     public async Task InvalidEnvironmentRetainsConfigurationFailure(string feed)
@@ -315,7 +315,7 @@ public sealed class FeedOptionTests
         output.GetStringBuilder().Clear();
         Assert.Equal(2, await app.RunAsync(["doctor", "--feed", "delayed_sip"]));
         Assert.Empty(output.ToString());
-        Assert.Contains("--feed must be either iex or sip", error.ToString());
+        Assert.Contains("delayed_sip requires --schema-version 1.1", error.ToString());
     }
 
     private static CliApplication Application(IReadOnlyDictionary<string, string?> environment,
