@@ -17,6 +17,8 @@ market quote RACK TCAI CLOU ARTY DTCR --json
 market quote NVDA AMD AVGO --json
 market quote RACK --json
 market doctor --json
+market quote RACK --feed sip --json
+market doctor --feed iex --check-connection --json
 market --help
 market --version
 ```
@@ -27,9 +29,23 @@ Ticker syntax is one to ten ASCII letters/digits, with optional interior `.` or 
 
 `market doctor --check-connection --json` optionally tests authenticated market-data access by requesting the latest trade for SPY on the configured feed. It reports access only; the probe price is not emitted or stored.
 
+### Optional feed selection (Stage A)
+
+Both commands accept one optional two-token `--feed VALUE` after the command name, before, between, or after other command arguments. Only `iex` and `sip` are supported, with case-insensitive values and canonical lowercase JSON output. The option name is case-sensitive. Feed values are not symbols and never appear in symbol results.
+
+Resolve the feed in this order: explicit `--feed`, then `ALPACA_DATA_FEED`, then `iex`. An absent or whitespace-only environment value selects the default. A valid CLI value overrides even an invalid environment feed; other configuration still requires validation. The override affects only this invocation and never writes to the environment or persistent settings.
+
+Missing, empty, whitespace-padded, or unsupported CLI values, duplicate `--feed` options (even identical values), `--feed=VALUE`, and root-level placement fail with `INVALID_ARGUMENTS` and exit `2`. An invalid CLI selection never falls back to the environment. An invalid effective environment feed remains `INVALID_CONFIGURATION`, exit `3`, subject to the existing missing-credential diagnostic ordering. Malformed CLI arguments take precedence over configuration failures and never create a provider. Existing help and version handling is unchanged, including help taking precedence when present.
+
+Quote failures retain the v1 quote envelope and default JSON output. An invalid or ambiguous CLI feed has `feed: null`; a valid selection is preserved in configuration and provider failures. Doctor usage errors keep their existing v1 usage-error shape in JSON mode; normal configuration/access responses retain their selected feed and diagnostics. Messages do not echo rejected option values. The existing JSON properties, freshness meaning, exit codes, timeout, cancellation, and no-fallback behavior are unchanged.
+
+Option-like tokens beginning with `--`, including malformed feed values and assignments, never become quote symbols or contribute to summary counts. Keep these tokens available for option validation so they still fail explicitly; recognized options such as `--json` retain their behavior. This clarifies the existing symbol/error contract without changing schema 1.0.
+
+`delayed_sip`, other SDK feeds, aliases, and numeric enum values remain unsupported. Delayed-data semantics and schema changes require separate approval; see [ADR-005](../decisions/ADR-005-invocation-feed-selection.md).
+
 ## 3. Authentication and endpoint
 
-`ALPACA_API_KEY` and `ALPACA_API_SECRET` are required for authenticated data calls. `ALPACA_DATA_FEED` explicitly selects `iex` or `sip`; the default is `iex`. The response always identifies the selected feed. An unauthorized feed is a structured failure, not a reason to downgrade.
+`ALPACA_API_KEY` and `ALPACA_API_SECRET` are required for authenticated data calls. The optional `--feed` overrides `ALPACA_DATA_FEED`; both select only `iex` or `sip`, with `iex` as the default. The response always identifies the selected feed when valid. An unauthorized feed is a structured failure, not a reason to downgrade.
 
 `ALPACA_DATA_URL` is optional. The SDK's documented default is used when unset. A configured endpoint must be a validated HTTPS URL and must be applied through a supported SDK configuration mechanism. Invalid or unsupported configuration fails explicitly. Credentials are never requested interactively or persisted.
 

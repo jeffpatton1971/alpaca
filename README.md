@@ -36,6 +36,12 @@ dotnet tool uninstall --global Market.Cli
 
 Set `ALPACA_API_KEY` and `ALPACA_API_SECRET` in the process environment. Optionally set `ALPACA_DATA_URL` to an HTTPS origin (without credentials, path, query, or fragment), `ALPACA_DATA_FEED` to `iex` or `sip` (default `iex`), and `MARKET_STALE_AFTER_MINUTES` to a positive whole number (default 15). Do not put credentials in project files or command-line arguments.
 
+Both `quote` and `doctor` accept `--feed iex` or `--feed sip` for one invocation. Selection precedence is **CLI → environment → default IEX**. A valid override also replaces an invalid environment feed; it never changes your shell or persistent settings. Feed values are case-insensitive and JSON uses lowercase. An unset or blank environment feed uses IEX.
+
+Use the two-token option once, anywhere after the command name. Missing, empty, whitespace-padded, unsupported, or duplicate values, `--feed=value`, and root-level placement are usage errors (exit 2). An invalid effective environment feed is a configuration error (exit 3). `delayed_sip` remains unsupported. Schema 1.0 and its age-based freshness meaning are unchanged.
+
+Malformed option tokens are excluded from quote-error symbol results and counts. For example, `market quote NVDA --feed --invalid --json` exits 2 and reports only `NVDA` in `symbols`, with `summary.requested` equal to 1.
+
 ```powershell
 $env:ALPACA_API_KEY = "<your-key>"
 $env:ALPACA_API_SECRET = "<your-secret>"
@@ -55,6 +61,8 @@ market quote NVDA AMD AVGO
 market quote RACK --json
 market doctor --json
 market doctor --check-connection --json
+market quote RACK TCAI CLOU ARTY DTCR --feed sip --json
+market doctor --feed iex --check-connection --json
 market --help
 market --version
 ```

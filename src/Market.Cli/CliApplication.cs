@@ -39,13 +39,20 @@ internal sealed class CliApplication(
 
     private async Task<int> RunQuoteAsync(string[] args, CancellationToken cancellationToken)
     {
-        var symbols = SymbolParser.Parse(args.Where(argument => argument != "--json"));
-        var configurationResult = MarketConfiguration.Load(environment);
-        var selectedFeed = configurationResult.Feed?.ToString().ToLowerInvariant();
-        if (symbols.Count == 0 || args.Any(argument => argument.StartsWith("--", StringComparison.Ordinal)
+        var feedOption = FeedOption.Parse(args);
+        args = feedOption.Arguments;
+        // Retain options in args for validation, but never serialize them as symbols on failure.
+        var symbols = SymbolParser.Parse(args.Where(argument => !argument.StartsWith("--", StringComparison.Ordinal)));
+        var configurationResult = feedOption.Error is null
+            ? MarketConfiguration.Load(environment, feedOption.Override)
+            : null;
+        var selectedFeed = configurationResult?.Feed?.ToString().ToLowerInvariant();
+        if (feedOption.Error is not null || symbols.Count == 0
+            || args.Any(argument => argument.StartsWith("--", StringComparison.Ordinal)
             && argument != "--json"))
         {
-            var errorResult = new MarketError("INVALID_ARGUMENTS", "Supply one or more symbols; only --json is supported.");
+            var errorResult = feedOption.Error ?? new MarketError("INVALID_ARGUMENTS",
+                "Supply one or more symbols; supported options are --json and --feed iex|sip.");
             await WriteJsonAsync(QuoteService.CreateFailureResponse(
                 symbols, errorResult, timeProvider.GetUtcNow(), selectedFeed)).ConfigureAwait(false);
             await error.WriteLineAsync($"market: {errorResult.Code}: {errorResult.Message}").ConfigureAwait(false);
@@ -71,7 +78,7 @@ internal sealed class CliApplication(
             return 2;
         }
 
-        if (!configurationResult.IsValid)
+        if (!configurationResult!.IsValid)
         {
             var configError = configurationResult.Error!;
             var response = QuoteService.CreateFailureResponse(
@@ -114,16 +121,23 @@ internal sealed class CliApplication(
     private async Task<int> RunDoctorAsync(string[] args, CancellationToken cancellationToken)
     {
         var json = args.Contains("--json", StringComparer.Ordinal);
+        var feedOption = FeedOption.Parse(args);
+        if (feedOption.Error is not null)
+        {
+            return await WriteUsageErrorAsync(feedOption.Error.Message, json).ConfigureAwait(false);
+        }
+
+        args = feedOption.Arguments;
         var checkConnection = args.Contains("--check-connection", StringComparer.Ordinal);
         if (args.Any(argument => argument.StartsWith("--", StringComparison.Ordinal)
             && argument is not "--json" and not "--check-connection")
             || args.Any(argument => !argument.StartsWith("--", StringComparison.Ordinal)))
         {
-            return await WriteUsageErrorAsync("doctor supports only --json and --check-connection.", json)
+            return await WriteUsageErrorAsync("doctor supports only --json, --check-connection, and --feed iex|sip.", json)
                 .ConfigureAwait(false);
         }
 
-        var result = MarketConfiguration.Load(environment);
+        var result = MarketConfiguration.Load(environment, feedOption.Override);
         var diagnostics = result.Diagnostics.ToList();
         MarketError? connectionError = null;
         if (result.IsValid && checkConnection)
@@ -257,13 +271,16 @@ internal sealed class CliApplication(
         market - read-only Alpaca US stock and ETF market-data CLI
 
         Usage:
-          market quote <SYMBOL> [SYMBOL ...] [--json]
-          market doctor [--check-connection] [--json]
+          market quote <SYMBOL> [SYMBOL ...] [--feed iex|sip] [--json]
+          market doctor [--feed iex|sip] [--check-connection] [--json]
           market --help
           market --version
 
         quote emits versioned JSON by default. Configure ALPACA_API_KEY and
-        ALPACA_API_SECRET in the process environment. ALPACA_DATA_FEED selects
-        iex (default) or sip. No trading operations are available.
+        ALPACA_API_SECRET in the process environment. Feed precedence is
+        --feed, then ALPACA_DATA_FEED, then iex. Values iex and sip are
+        case-insensitive. Use --feed once, after the command name; it affects
+        only this invocation. delayed_sip is not supported. JSON schema 1.0
+        and age-based freshness are unchanged. No trading operations are available.
         """;
 }

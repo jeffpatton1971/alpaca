@@ -4,6 +4,8 @@
 
 Implement a read-only .NET tool for latest stock/ETF observations, previous completed-session close, daily calculations, feed provenance, freshness/session context, stable JSON, structured errors, tests, and packaging.
 
+Stage A feed selection is approved under [ADR-005](../decisions/ADR-005-invocation-feed-selection.md): optional IEX/SIP invocation overrides with schema 1.0 unchanged. A separate delayed-SIP stage, new freshness semantics, schema changes, and home automation adoption remain unapproved.
+
 ## Potential Phase 2 — Historical observations
 
 Planning context only; not authorized for implementation. Potentially add scheduled collection, local SQLite storage, historical price comparison, intraday movement analysis, weekly performance summaries, and freshness/completeness reporting.
