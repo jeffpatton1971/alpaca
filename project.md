@@ -18,6 +18,7 @@ Documentation contract: llamarc42/v0.1
 - [ADR-003: versioned JSON](decisions/ADR-003-versioned-market-contract.md)
 - [ADR-004: environment credentials](decisions/ADR-004-environment-credentials.md)
 - [ADR-005: invocation-scoped feed selection](decisions/ADR-005-invocation-feed-selection.md)
+- [ADR-006: delayed SIP and opt-in schema 1.1](decisions/ADR-006-delayed-sip-schema-1-1.md)
 - [Acceptance and verification](quality/acceptance.md)
 - [Risks and limitations](quality/risks.md)
 - [Roadmap](quality/roadmap.md)

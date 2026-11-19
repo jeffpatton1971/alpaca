@@ -34,11 +34,17 @@ dotnet tool uninstall --global Market.Cli
 
 ## Configure
 
-Set `ALPACA_API_KEY` and `ALPACA_API_SECRET` in the process environment. Optionally set `ALPACA_DATA_URL` to an HTTPS origin (without credentials, path, query, or fragment), `ALPACA_DATA_FEED` to `iex` or `sip` (default `iex`), and `MARKET_STALE_AFTER_MINUTES` to a positive whole number (default 15). Do not put credentials in project files or command-line arguments.
+Set `ALPACA_API_KEY` and `ALPACA_API_SECRET` in the process environment. Optionally set `ALPACA_DATA_URL` to an HTTPS origin (without credentials, path, query, or fragment), `ALPACA_DATA_FEED` to `iex`, `sip`, or `delayed_sip` (default `iex`), and `MARKET_STALE_AFTER_MINUTES` to a positive whole number (default 15). Delayed SIP additionally requires the schema opt-in below. Do not put credentials in project files or command-line arguments.
 
-Both `quote` and `doctor` accept `--feed iex` or `--feed sip` for one invocation. Selection precedence is **CLI → environment → default IEX**. A valid override also replaces an invalid environment feed; it never changes your shell or persistent settings. Feed values are case-insensitive and JSON uses lowercase. An unset or blank environment feed uses IEX.
+Both `quote` and `doctor` accept `--feed iex`, `--feed sip`, or `--feed delayed_sip` for one invocation. Selection precedence is **CLI → environment → default IEX**. A valid override also replaces an invalid environment feed; it never changes your shell or persistent settings. Feed values are case-insensitive and JSON uses canonical lowercase names. An unset or blank environment feed uses IEX.
 
-Use the two-token option once, anywhere after the command name. Missing, empty, whitespace-padded, unsupported, or duplicate values, `--feed=value`, and root-level placement are usage errors (exit 2). An invalid effective environment feed is a configuration error (exit 3). `delayed_sip` remains unsupported. Schema 1.0 and its age-based freshness meaning are unchanged.
+Use the two-token option once, anywhere after the command name. Missing, empty, whitespace-padded, unsupported, or duplicate values, `--feed=value`, and root-level placement are usage errors (exit 2). An invalid effective environment feed is a configuration error (exit 3), subject to missing-credential diagnostic ordering.
+
+Schema defaults to **1.0**. Delayed SIP requires explicit `--schema-version 1.1` on either command, including offline doctor. The schema option accepts only `1.0` or `1.1`, once, as a separate argument after the command; malformed or incompatible selections exit 2 before requests. No environment variable changes the schema.
+
+Schema 1.1 adds `previousCloseFeed` and `expectedDelaySeconds` to quote/normal doctor output, plus `excessAgeSeconds` and `isStaleBeyondExpectedDelay` per quote symbol. Raw `quoteAgeSeconds` and `isStale` keep their 1.0 meanings. Delayed SIP has a nominal 900-second delay: a 901-second-old trade has one excess second and is not stale beyond the default additional 900-second threshold, even though raw `isStale` is true. Neither age measure alone makes an observation an error or diagnoses a provider outage. Missing/invalid timestamps produce null age values. Existing schema 1.0 output has no new properties.
+
+Delayed latest trades and doctor probes request `delayed_sip`; prior-session raw bars explicitly request historical `sip` outside its recent-data restriction. Responses identify this mapping; it is not fallback after a failed request. Feed selection does not establish account entitlement. Doctor without `--check-connection` remains offline; its connection probe tests latest trades only, not prior-close access. Home automation and its pinned schema 1.0 configuration require separate approval to change.
 
 Malformed option tokens are excluded from quote-error symbol results and counts. For example, `market quote NVDA --feed --invalid --json` exits 2 and reports only `NVDA` in `symbols`, with `summary.requested` equal to 1.
 
@@ -63,6 +69,8 @@ market doctor --json
 market doctor --check-connection --json
 market quote RACK TCAI CLOU ARTY DTCR --feed sip --json
 market doctor --feed iex --check-connection --json
+market quote RACK TCAI CLOU ARTY DTCR --feed delayed_sip --schema-version 1.1 --json
+market doctor --feed delayed_sip --schema-version 1.1 --json
 market --help
 market --version
 ```

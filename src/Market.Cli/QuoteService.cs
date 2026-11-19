@@ -26,7 +26,7 @@ internal sealed class QuoteService(
         return new QuoteResponse(
             "1.0",
             "alpaca",
-            configuration.Feed.ToString().ToLowerInvariant(),
+            FeedNames.Canonical(configuration.Feed),
             MarketTime.ToUtcString(retrievedAt),
             "America/Chicago",
             snapshot?.Session switch
@@ -112,6 +112,9 @@ internal sealed class QuoteService(
         }
 
         TimeSpan? age = hasTrade ? retrievedAt - trade!.TimestampUtc : null;
+        TimeSpan? excessAge = age.HasValue ? TimeSpan.FromTicks(Math.Max(0,
+            age.Value.Ticks - TimeSpan.FromSeconds(FeedNames.ExpectedDelaySeconds(
+                FeedNames.Canonical(configuration.Feed))!.Value).Ticks)) : null;
         decimal? price = hasTrade ? trade!.Price : null;
         decimal? change = hasTrade && hasPreviousClose && previousClose != 0
             ? trade!.Price - previousClose
@@ -137,7 +140,12 @@ internal sealed class QuoteService(
             age.HasValue ? Math.Max(0, (long)Math.Floor(age.Value.TotalSeconds)) : null,
             age.HasValue ? age.Value > TimeSpan.FromMinutes(configuration.StaleAfterMinutes) : null,
             status,
-            error);
+            error)
+        {
+            ExcessAgeSeconds = excessAge.HasValue ? (long)Math.Floor(excessAge.Value.TotalSeconds) : null,
+            IsStaleBeyondExpectedDelay = excessAge.HasValue
+                ? excessAge.Value > TimeSpan.FromMinutes(configuration.StaleAfterMinutes) : null
+        };
     }
 
     private static SymbolQuote Empty(string symbol, string status, MarketError error) =>

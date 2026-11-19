@@ -6,15 +6,19 @@ namespace Market.Cli.Tests;
 public sealed class CliApplicationTests
 {
     [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, false, false)]
-    [InlineData(false, true, false)]
-    [InlineData(true, true, false)]
-    [InlineData(false, false, true)]
-    [InlineData(true, false, true)]
-    [InlineData(false, true, true)]
-    [InlineData(true, true, true)]
-    public async Task BlockedProviderCannotPreventDeadlineOrCallerCancellation(bool doctor, bool cancel, bool overrideFeed)
+    [InlineData(false, false, null)]
+    [InlineData(true, false, null)]
+    [InlineData(false, true, null)]
+    [InlineData(true, true, null)]
+    [InlineData(false, false, "sip")]
+    [InlineData(true, false, "sip")]
+    [InlineData(false, true, "sip")]
+    [InlineData(true, true, "sip")]
+    [InlineData(false, false, "delayed_sip")]
+    [InlineData(true, false, "delayed_sip")]
+    [InlineData(false, true, "delayed_sip")]
+    [InlineData(true, true, "delayed_sip")]
+    public async Task BlockedProviderCannotPreventDeadlineOrCallerCancellation(bool doctor, bool cancel, string? overrideFeed)
     {
         using var caller = new CancellationTokenSource();
         using var output = new StringWriter();
@@ -24,7 +28,9 @@ public sealed class CliApplicationTests
             TimeProvider.System, cancel ? TimeSpan.FromSeconds(10) : TimeSpan.FromMilliseconds(500));
 
         var args = Arguments(doctor);
-        var command = app.RunAsync(overrideFeed ? [.. args, "--feed", "sip"] : args, caller.Token);
+        if (overrideFeed is not null) args = [.. args, "--feed", overrideFeed];
+        if (overrideFeed == "delayed_sip") args = [.. args, "--schema-version", "1.1"];
+        var command = app.RunAsync(args, caller.Token);
         try
         {
             await provider.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -43,7 +49,8 @@ public sealed class CliApplicationTests
         }
         AssertFailureJson(output.ToString(), doctor, cancel ? "REQUEST_CANCELLED" : "NETWORK_TIMEOUT");
         using var json = JsonDocument.Parse(output.ToString());
-        Assert.Equal(overrideFeed ? "sip" : "iex", json.RootElement.GetProperty("feed").GetString());
+        Assert.Equal(overrideFeed ?? "iex", json.RootElement.GetProperty("feed").GetString());
+        Assert.Equal(overrideFeed == "delayed_sip" ? "1.1" : "1.0", json.RootElement.GetProperty("schemaVersion").GetString());
     }
 
     [Theory]

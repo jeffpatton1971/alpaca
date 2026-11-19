@@ -88,6 +88,7 @@ internal sealed class AlpacaMarketDataProvider : IMarketDataProvider
                 group.ToArray(),
                 group.Key,
                 feed,
+                clockTimestamp,
                 cancellationToken).ConfigureAwait(false);
             foreach (var (symbol, close) in closes)
             {
@@ -138,18 +139,23 @@ internal sealed class AlpacaMarketDataProvider : IMarketDataProvider
         IReadOnlyList<string> symbols,
         DateOnly sessionDate,
         MarketDataFeed feed,
+        DateTimeOffset clockTimestamp,
         CancellationToken cancellationToken)
     {
         var results = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var start = MarketTime.ToUtcDateTime(sessionDate);
         var end = MarketTime.ToUtcDateTime(sessionDate, nextDay: true);
+        // Historical endpoints do not accept delayed_sip. Do not request recent SIP
+        // or shift the comparison session if its complete window is not yet available.
+        if (feed == MarketDataFeed.DelayedSip && end > clockTimestamp.UtcDateTime.AddMinutes(-15))
+            return results;
 
         foreach (var chunk in symbols.Chunk(MaxSymbolsPerRequest))
         {
             var request = new HistoricalBarsRequest(chunk, start, end, BarTimeFrame.Day)
             {
                 Adjustment = Adjustment.Nothing,
-                Feed = feed
+                Feed = FeedNames.Historical(feed)
             };
             var requested = chunk.ToHashSet(StringComparer.Ordinal);
             var seenTokens = new HashSet<string>(StringComparer.Ordinal);
