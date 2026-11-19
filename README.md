@@ -40,6 +40,8 @@ Both `quote` and `doctor` accept `--feed iex` or `--feed sip` for one invocation
 
 Use the two-token option once, anywhere after the command name. Missing, empty, whitespace-padded, unsupported, or duplicate values, `--feed=value`, and root-level placement are usage errors (exit 2). An invalid effective environment feed is a configuration error (exit 3). `delayed_sip` remains unsupported. Schema 1.0 and its age-based freshness meaning are unchanged.
 
+Malformed option tokens are excluded from quote-error symbol results and counts. For example, `market quote NVDA --feed --invalid --json` exits 2 and reports only `NVDA` in `symbols`, with `summary.requested` equal to 1.
+
 ```powershell
 $env:ALPACA_API_KEY = "<your-key>"
 $env:ALPACA_API_SECRET = "<your-secret>"

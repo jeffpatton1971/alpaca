@@ -41,7 +41,8 @@ internal sealed class CliApplication(
     {
         var feedOption = FeedOption.Parse(args);
         args = feedOption.Arguments;
-        var symbols = SymbolParser.Parse(args.Where(argument => argument != "--json"));
+        // Retain options in args for validation, but never serialize them as symbols on failure.
+        var symbols = SymbolParser.Parse(args.Where(argument => !argument.StartsWith("--", StringComparison.Ordinal)));
         var configurationResult = feedOption.Error is null
             ? MarketConfiguration.Load(environment, feedOption.Override)
             : null;

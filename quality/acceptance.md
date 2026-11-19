@@ -35,6 +35,15 @@ Record command and outcome for each performed check. Distinguish compile-time, m
 
 ## Verification evidence
 
+### PR #2 flag-like feed value correction — November 19, 2026
+
+- Reproduced the P2 finding before the production correction: the expanded invalid-feed regression matrix had 4 failures and 46 passes because flag-like tokens became quote symbols. Quote symbol extraction now excludes tokens starting with `--` while retaining them for option validation. This preserves explicit usage errors, CLI/environment/default precedence, and schema 1.0; no accepted decision changed.
+- Added quote/doctor cases for flag-like feed values, flag-like assignments, equals-form assignments, and recognized options after a missing feed value. Assertions cover exit 2, `INVALID_ARGUMENTS`, no provider creation, no rejected-value disclosure, and only the requested symbol/counts. Separate cases prove unknown assignments still fail both with and without a valid CLI override.
+- With .NET SDK 10.0.404 on Windows, `dotnet restore Market.slnx --locked-mode --configfile <isolated NuGet.org config>`, `dotnet build Market.slnx --configuration Release --no-restore`, and `dotnet test Market.slnx --configuration Release --no-build --no-restore` passed: zero build warnings/errors and all 174 tests passed.
+- The actual pinned LlamaRC42 Core `DocumentationValidator.Validate` API (`67d0c8edba57baf1bd6d25a9fbd5b1dcae5ae267`), run through the isolated validation host, returned `llamarc42/v0.1: Valid` with no diagnostics/tool errors, including after this evidence update. `git diff --check` passed.
+- `dotnet pack src/Market.Cli/Market.Cli.csproj --configuration Release --no-build --no-restore` and a fresh isolated local-source installation passed. Nine checks outside the repository passed: help, version, offline doctor with synthetic credentials and a CLI override, credential-free doctor/quote, rejected delayed SIP, and three malformed flag-like value/assignment cases. The malformed quote responses retained schema 1.0 and only the requested symbols/counts without leaking rejected values.
+- Re-ran the external synthetic CLI harness and home's unchanged `Read-Observation` validator for environment-selected, CLI-overridden, stale, partial, and provider-error responses. All five passed with expected complete/degraded classifications; the validator blob still matched `03b31c72ca689d284b4752775caf39025519e568`. No live requests, home changes, automation changes, publication, or merge were performed.
+
 ### Stage A optional feed selection — November 18, 2026
 
 - Owner approval covers Stage A only. Requirements and accepted ADR-005 were updated before implementation; IEX/SIP remain the only supported feeds and schema 1.0 retains its existing properties and raw-age freshness meaning.

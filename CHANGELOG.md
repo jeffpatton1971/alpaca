@@ -3,6 +3,7 @@
 ## 0.1.0 - Unreleased
 
 - Add optional `--feed iex|sip` to quote and doctor with invocation-only CLI, environment, then IEX-default precedence. Preserve schema 1.0 and existing freshness/provider behavior; delayed SIP is not enabled.
+- Exclude malformed option-like feed values and assignments from quote-error symbols and summary counts while retaining explicit usage errors.
 
 - Add a read-only `market` .NET 10 tool for Alpaca US stock and ETF quotes.
 - Add versioned JSON output, feed/session/freshness provenance, diagnostics, and mocked tests.

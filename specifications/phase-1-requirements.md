@@ -39,6 +39,8 @@ Missing, empty, whitespace-padded, or unsupported CLI values, duplicate `--feed`
 
 Quote failures retain the v1 quote envelope and default JSON output. An invalid or ambiguous CLI feed has `feed: null`; a valid selection is preserved in configuration and provider failures. Doctor usage errors keep their existing v1 usage-error shape in JSON mode; normal configuration/access responses retain their selected feed and diagnostics. Messages do not echo rejected option values. The existing JSON properties, freshness meaning, exit codes, timeout, cancellation, and no-fallback behavior are unchanged.
 
+Option-like tokens beginning with `--`, including malformed feed values and assignments, never become quote symbols or contribute to summary counts. Keep these tokens available for option validation so they still fail explicitly; recognized options such as `--json` retain their behavior. This clarifies the existing symbol/error contract without changing schema 1.0.
+
 `delayed_sip`, other SDK feeds, aliases, and numeric enum values remain unsupported. Delayed-data semantics and schema changes require separate approval; see [ADR-005](../decisions/ADR-005-invocation-feed-selection.md).
 
 ## 3. Authentication and endpoint

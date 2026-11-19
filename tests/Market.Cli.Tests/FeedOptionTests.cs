@@ -62,7 +62,13 @@ public sealed class FeedOptionTests
             ["--feed", "0"], ["--feed", "Iex,Sip"],
             ["--feed", "iex", "--feed", "iex"], ["--feed", "iex", "--feed", "sip"],
             ["--feed", "--feed", "sip"], ["--feed=sip"], ["--feed="],
-            ["--feed", "synthetic-private-value"], ["--feed=synthetic-private-value"]
+            ["--feed", "synthetic-private-value"], ["--feed=synthetic-private-value"],
+            ["--feed", "--synthetic-private-value"],
+            ["--feed", "--source=synthetic-private-value"],
+            ["--feed=--synthetic-private-value"],
+            ["--feed=--source=synthetic-private-value"],
+            ["--feed", "--json", "--source=synthetic-private-value"],
+            ["--feed", "--check-connection"]
         ];
         foreach (var doctor in new[] { false, true })
         foreach (var args in options) yield return [doctor, args];
@@ -88,7 +94,33 @@ public sealed class FeedOptionTests
             Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("feed").ValueKind);
             var symbol = Assert.Single(json.RootElement.GetProperty("symbols").EnumerateArray());
             Assert.Equal("NVDA", symbol.GetProperty("symbol").GetString());
+            var summary = json.RootElement.GetProperty("summary");
+            Assert.Equal(1, summary.GetProperty("requested").GetInt32());
+            Assert.Equal(0, summary.GetProperty("succeeded").GetInt32());
+            Assert.Equal(1, summary.GetProperty("failed").GetInt32());
         }
+        Assert.DoesNotContain("synthetic-private-value", (output.ToString() + error).ToLowerInvariant());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FilteringOptionTokensDoesNotSilentlyAcceptUnknownOptions(bool overrideFeed)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var app = new CliApplication(TestData.Environment(), output, error,
+            _ => throw new InvalidOperationException("Provider must not be created."), new FixedTimeProvider(TestData.Now));
+        string[] args = ["quote", "NVDA", "--source=synthetic-private-value", "--json"];
+        if (overrideFeed) args = [.. args, "--feed", "sip"];
+
+        Assert.Equal(2, await app.RunAsync(args));
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal("INVALID_ARGUMENTS", json.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(overrideFeed ? "sip" : "iex", json.RootElement.GetProperty("feed").GetString());
+        Assert.Equal(1, json.RootElement.GetProperty("summary").GetProperty("requested").GetInt32());
+        Assert.Equal("NVDA", Assert.Single(json.RootElement.GetProperty("symbols").EnumerateArray())
+            .GetProperty("symbol").GetString());
         Assert.DoesNotContain("synthetic-private-value", (output.ToString() + error).ToLowerInvariant());
     }
 
